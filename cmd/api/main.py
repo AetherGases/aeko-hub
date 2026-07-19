@@ -5,6 +5,8 @@ from pymongo import MongoClient
 import os
 import uvicorn
 
+from internal.http.user_handlers import router as user_router
+
 load_dotenv()
 
 MONGO_URI = os.getenv("MONGO_URI")
@@ -18,6 +20,7 @@ async def lifespan(app: FastAPI):
     global mongo_client, db
     mongo_client = MongoClient(MONGO_URI)
     db = mongo_client[DB_NAME]
+    app.state.db = db
     try:
         db.command("ping")
     except Exception as exc:
@@ -26,8 +29,4 @@ async def lifespan(app: FastAPI):
     mongo_client.close()
 
 app = FastAPI(lifespan=lifespan)
-
-if __name__ == "__main__":
-    port = int(os.getenv("PORT", 8000))
-    host = os.getenv("HOST", "127.0.0.1")
-    uvicorn.run("main:app", host=host, port=port, reload=True)
+app.include_router(user_router)
