@@ -6,6 +6,7 @@ import os
 import uvicorn
 
 from internal.http.user_handlers import router as user_router
+from internal.http.session_handlers import router as session_router
 
 load_dotenv()
 
@@ -30,3 +31,4 @@ async def lifespan(app: FastAPI):
 
 app = FastAPI(lifespan=lifespan)
 app.include_router(user_router)
+app.include_router(session_router)
