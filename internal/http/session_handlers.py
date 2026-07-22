@@ -1,6 +1,8 @@
 from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel
 
+from datetime import datetime
+
 from session.database.repository import Repository
 from session.service import Service
 from session.session import IService
@@ -13,6 +15,11 @@ class SessionResponseData(BaseModel):
 
     class Config:
         frozen = True
+
+class MessageResponseData(BaseModel):
+    input_message: str
+    output_message: str
+    submitted_at: datetime
 
 def get_session_service(request: Request) -> IService:
     database = request.app.state.db
@@ -33,3 +40,23 @@ def get_user_sessions(
         raise HTTPException(status_code=404, detail=str(exc)) from exc
     except Exception as exc:
         raise HTTPException(status_code=500, detail=f"Error retrieving user sessions: {exc}") from exc
+
+@router.get("/v1/ai/session/{id_session}/messages", response_model=list[MessageResponseData])
+def get_session_messages(
+    id_session: str,
+    service: IService = Depends(get_session_service),
+) -> list[MessageResponseData]:
+    try:
+        messages = service.get_session_messages(id_session)
+        return [
+            MessageResponseData(
+                input_message=message.input,
+                output_message=message.output,
+                submitted_at=message.submitted_at
+            )
+            for message in messages
+        ]
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=f"Error retrieving session messages: {exc}") from exc
