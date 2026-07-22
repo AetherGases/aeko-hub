@@ -5,9 +5,9 @@ class Service(IService):
     def __init__(self, repository):
         self.repository = repository
 
-    def getMongoUser(self, id_external_user) -> User:
+    def get_mongo_user(self, id_external_user) -> User:
         try:
-            return self.repository.getUser(id_external_user)
+            return self.repository.get_user(id_external_user)
         except ValueError as ve:
             raise ve
         except Exception as e:

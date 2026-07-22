@@ -3,7 +3,7 @@ from session.entity import Session, Message
 
 class IRepository(ABC):
     @abstractmethod
-    def getUserSessions(self, id_user: str) -> list[Session]:
+    def get_user_sessions(self, id_user: str) -> list[Session]:
         pass
 
     @abstractmethod
@@ -12,7 +12,7 @@ class IRepository(ABC):
 
 class IService(ABC):
     @abstractmethod
-    def getUserSessions(self, id_external_user) -> list[Session]:
+    def get_user_sessions(self, id_external_user) -> list[Session]:
         pass
 
     @abstractmethod

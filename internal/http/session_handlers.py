@@ -34,7 +34,7 @@ def get_user_sessions(
     service: IService = Depends(get_session_service),
 ) -> list[SessionResponseData]:
     try:
-        sessions = service.getUserSessions(id_user)
+        sessions = service.get_user_sessions(id_user)
         return [SessionResponseData(id=session.id, name=session.name) for session in sessions]
     except ValueError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc

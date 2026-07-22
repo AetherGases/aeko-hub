@@ -6,7 +6,7 @@ class Repository(IRepository):
     def __init__(self, db):
         self.db = db
 
-    def getUserSessions(self, id_user: str) -> list[Session]:
+    def get_user_sessions(self, id_user: str) -> list[Session]:
         try:
             query, projection = q.get_user_sessions_query(id_user)
             sessions_data = self.db["session"].find(query, projection)

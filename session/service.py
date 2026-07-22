@@ -5,9 +5,9 @@ class Service(IService):
     def __init__(self, repository):
         self.repository = repository
 
-    def getUserSessions(self, id_user) -> list[Session]:
+    def get_user_sessions(self, id_user) -> list[Session]:
         try:
-            return self.repository.getUserSessions(id_user)
+            return self.repository.get_user_sessions(id_user)
         except ValueError as e:
             raise e
         except Exception as e:
