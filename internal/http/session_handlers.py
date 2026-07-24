@@ -2,6 +2,7 @@ from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel
 
 from datetime import datetime
+from fastapi import APIRouter, Depends, HTTPException, Request
 
 from session.database.repository import Repository
 from session.service import Service
@@ -60,3 +61,32 @@ def get_session_messages(
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     except Exception as exc:
         raise HTTPException(status_code=500, detail=f"Error retrieving session messages: {exc}") from exc
+
+from fastapi import APIRouter, Depends, HTTPException, Request
+
+@router.post("/aether-api/v1/ai/user/session/message")
+async def send_message(
+    request: Request,
+    service: IService = Depends(get_session_service),
+):
+    body = await request.json()
+
+    id_session = body.get("id_session")
+    input = body.get("input", "")
+    id_user = body.get("id_user", "")
+    aeko_messenger = request.app.state._state.get("aeko_messenger")
+
+    if not aeko_messenger:
+        raise HTTPException(status_code=500, detail="Aeko messenger is not initialized")
+
+    try:
+        message = service.send_message(id_session, input, id_user, aeko_messenger)
+        return MessageResponseData(
+            input_message=message.input,
+            output_message=message.output,
+            submitted_at=message.submitted_at,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=f"Error sending message: {exc}") from exc

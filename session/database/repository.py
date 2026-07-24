@@ -19,18 +19,30 @@ class Repository(IRepository):
         except Exception as e:
             raise RuntimeError(f"Error fetching user sessions from database: {e}")
         
-    def get_session_messages(self, id_session: str) -> list[Message]:
+    def get_session_messages_count(self, id_session: str) -> int:
         try:
-            query, projection = q.get_session_messages_query(id_session)
+            query, projection = q.get_session_messages_count_query(id_session)
             session_data = self.db["session"].find_one(query, projection)
             if not session_data:
                 raise ValueError(f"No session found with id_session {id_session}.")
-            return [message_from_data(data) for data in session_data.get("messages", [])]
+            return session_data.get("messages_count")
         except ValueError as e:
             raise e
         except Exception as e:
             raise RuntimeError(f"Error fetching session messages from database: {e}")
 
+    def save_message(self, id_session: str, message: Message) -> None:
+        try:
+            query = q.get_save_message_query(
+                input=message.input,
+                output=message.output,
+                llm=message.llm,
+                input_tokens=message.input_tokens,
+                output_tokens=message.output_tokens
+            )
+            self.db["session"].update_one({"_id": id_session}, query)
+        except Exception as e:
+            raise RuntimeError(f"Error saving message to database: {e}")
 
 def message_from_data(data: dict) -> Message:
     return Message(
