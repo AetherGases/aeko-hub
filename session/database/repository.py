@@ -2,6 +2,8 @@ from session.session import IRepository
 from session.entity import Session, Message
 from session.database import query as q
 
+from user.user import IRepository as IUserRepository
+
 class Repository(IRepository):
     def __init__(self, db):
         self.db = db
@@ -30,6 +32,18 @@ class Repository(IRepository):
             raise e
         except Exception as e:
             raise RuntimeError(f"Error fetching session messages from database: {e}")
+
+    def create_session(self, id_user: str, user_repository: IUserRepository) -> str:
+        try:
+            if not user_repository.get_user_by_id(id_user):
+                raise ValueError(f"User with id_user {id_user} does not exist.")
+            
+            query = q.get_create_session_query(id_user)
+            result = self.db["session"].insert_one(query)
+            return str(result.inserted_id)
+        except Exception as e:
+            raise RuntimeError(f"Error creating session in database: {e}")
+
 
     def save_message(self, id_session: str, message: Message) -> None:
         try:

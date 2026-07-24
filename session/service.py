@@ -15,7 +15,7 @@ from aeko_sdk import AekoMessageDTO # type: ignore
 from session.session import IService
 from session.entity import Session, Message
 
-TOKEN_LIMIT_PER_USER = 200000
+from user.user import IRepository as IUserRepository
 
 class Service(IService):
     def __init__(self, repository):
@@ -37,10 +37,10 @@ class Service(IService):
         except Exception as e:
             raise RuntimeError(f"Error retrieving session messages: {e}")
 
-    def send_message(self, id_session: str, input: str, id_user: str, aeko_messenger: AekoMessenger) -> Message:
+    def send_message(self, id_session: str, input: str, id_user: str, aeko_messenger: AekoMessenger, user_repository: IUserRepository) -> Message:
         try:
             if not id_session:
-                id_session = self.repository.create_session(id_user)
+                id_session = self.repository.create_session(id_user, user_repository)
 
             self._validate_session_and_user_allowance(id_session, id_user)
 

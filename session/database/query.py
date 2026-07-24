@@ -79,3 +79,11 @@ def get_save_message_query(input: str, output: str, llm: str, input_tokens: int,
     }
 
     return query
+
+def get_create_session_query(id_user: str) -> dict:
+    query = {
+        "id_user": id_user,
+        "messages": []
+    }
+
+    return query

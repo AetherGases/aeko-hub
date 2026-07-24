@@ -1,4 +1,3 @@
-from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel
 
 from datetime import datetime
@@ -7,6 +6,9 @@ from fastapi import APIRouter, Depends, HTTPException, Request
 from session.database.repository import Repository
 from session.service import Service
 from session.session import IService
+
+from fastapi import APIRouter, Depends, HTTPException, Request
+from user.database.repository import Repository as UserRepository
 
 router = APIRouter()
 
@@ -80,7 +82,7 @@ async def send_message(
         raise HTTPException(status_code=500, detail="Aeko messenger is not initialized")
 
     try:
-        message = service.send_message(id_session, input, id_user, aeko_messenger)
+        message = service.send_message(id_session, input, id_user, aeko_messenger, UserRepository(request.app.state.db))
         return MessageResponseData(
             input_message=message.input,
             output_message=message.output,

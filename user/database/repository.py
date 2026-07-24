@@ -19,3 +19,19 @@ class Repository(IRepository):
             )
         except Exception as e:
             raise RuntimeError(f"Error fetching user from database: {e}")
+
+    def get_user_by_id(self, id_user: str) -> User:
+        try:
+            query, projection = q.get_user_query(id_user)
+            user_data = self.db.user.find_one(query, projection)
+            if not user_data:
+                return None
+            return User(
+                id=str(user_data["_id"]),
+                id_external_user=user_data["id_external_user"],
+                role=user_data["role"],
+                usecase=user_data["usecase"]
+            )
+        except Exception as e:
+            raise RuntimeError(f"Error fetching user by id from database: {e}")
+        

@@ -33,5 +33,13 @@ class IService(ABC):
         pass
 
     @abstractmethod
+    def get_session_messages(self, id_session: str) -> list[Message]:
+        pass
+
+    @abstractmethod
     def send_message(self, id_session: str, input: str, id_user: str, aeko_messenger: AekoMessenger) -> Message:
+        pass
+
+    @abstractmethod
+    def _validate_session_and_user_allowance(self, id_session: str, id_user: str) -> bool:
         pass
