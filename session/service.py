@@ -41,14 +41,18 @@ class Service(IService):
         try:
             if not id_session:
                 id_session = self.repository.create_session(id_user, user_repository)
-
+                aeko_messenger.set_alter_name(True)
+                
             self._validate_session_and_user_allowance(id_session, id_user)
 
             aeko_messenger.prepare(id_user, id_session)
-            message = _internal_message_from_aeko_message_dto(aeko_messenger.send_message(input))
+            message, new_name = _internal_message_from_aeko_message_dto(aeko_messenger.send_message(input))
 
             self.repository.save_message(id_session, message)
 
+            if new_name:
+                self.repository.update_name(id_session, new_name)
+                
             return message
         except ValueError as e:
             raise e
