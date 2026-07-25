@@ -29,7 +29,7 @@ def get_user(
     service: IService = Depends(get_user_service),
 ) -> UserResponseData:
     try:
-        user = service.getMongoUser(id_external_user)
+        user = service.get_mongo_user(id_external_user)
         return UserResponseData(
             id_external_user=user.id_external_user,
             role=user.role,

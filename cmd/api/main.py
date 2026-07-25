@@ -3,18 +3,45 @@ from contextlib import asynccontextmanager
 from dotenv import load_dotenv
 from pymongo import MongoClient
 import os
-import uvicorn
 
 from internal.http.user_handlers import router as user_router
 from internal.http.session_handlers import router as session_router
+
+# Mocks ai sdk
+from unittest.mock import MagicMock
+import sys
+
+mock_aeko = MagicMock()
+
+mock_aeko.AekoMessenger = MagicMock()
+
+sys.modules["aeko_sdk"] = mock_aeko
+
+from aeko_sdk import AekoMessenger # type: ignore
+from aeko_sdk import AekoMessageDTO # type: ignore
 
 load_dotenv()
 
 MONGO_URI = os.getenv("MONGO_URI")
 DB_NAME = os.getenv("DB_NAME")
+aeko_model_list = os.getenv("AEKO_MODEL_LIST")
+aeko_api_key_list = os.getenv("AEKO_API_KEY_LIST")
+
+# Tools must follow the defined interfaces in Aeko SDK
+AEKO_REPORT_ANALYTICS_TOOLS = [] # Fill up later....
+AEKO_POLLUTANTS_ANALYTICS_TOOLS = [] # Fill up later....
+AEKO_GREEN_GASES_ANALYTICS_TOOLS = [] # Fill up later....
+AEKO_VIABILLITY_ANALYTICS_TOOLS = [] # Fill up later...., only web query
+AEKO_REPORT_BUILDER_TOOLS = [] # Fill up later....
+
 
 mongo_client = None
 db = None
+
+aeko_model_list = aeko_model_list.split(",") if aeko_model_list else []
+aeko_api_key_list = aeko_api_key_list.split(",") if aeko_api_key_list else []
+aeko_messenger = None
+
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
@@ -22,6 +49,16 @@ async def lifespan(app: FastAPI):
     mongo_client = MongoClient(MONGO_URI)
     db = mongo_client[DB_NAME]
     app.state.db = db
+    aeko_messenger = AekoMessenger()
+    aeko_messenger.config(models=aeko_model_list, api_keys=aeko_api_key_list)
+    aeko_messenger.set_tools(
+        report_analytics_tools=AEKO_REPORT_ANALYTICS_TOOLS,
+        pollutants_analytics_tools=AEKO_POLLUTANTS_ANALYTICS_TOOLS,
+        green_gases_analytics_tools=AEKO_GREEN_GASES_ANALYTICS_TOOLS,
+        viability_analytics_tools=AEKO_VIABILLITY_ANALYTICS_TOOLS,
+        report_builder_tools=AEKO_REPORT_BUILDER_TOOLS
+    )
+    app.state._state["aeko_messenger"] = aeko_messenger
     try:
         db.command("ping")
     except Exception as exc:
