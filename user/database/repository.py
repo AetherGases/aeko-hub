@@ -6,11 +6,12 @@ class Repository(IRepository):
     def __init__(self, db):
         self.db = db
 
-    def get_user(self, id_external_user) -> User:
+    def get_user_by_id(self, id_user: str) -> User:
         try:
-            user_data = self.db.user.find_one(q.get_user_query_filter(id_external_user))
+            user_data = self.db.user.find_one(q.get_user_query_filter(id_user))
+            user_data = self.db.user.find_one(q.get_user_query_filter(id_user))
             if not user_data:
-                raise ValueError(f"User with id_external_user {id_external_user} not found.")
+                raise ValueError(f"User with id_external_user {id_user} not found.")
             return User(
                 id=str(user_data["_id"]),
                 id_external_user=user_data["id_external_user"],
