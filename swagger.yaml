@@ -62,7 +62,7 @@ paths:
               schema:
                 $ref: '#/components/schemas/ErrorResponse'
               example:
-                detail: Error retrieving user: Error fetching user from database: ...
+                detail: 'Error retrieving user: Error fetching user from database: ...'
   /v1/ai/sessions/user/{id_user}:
     get:
       tags:
@@ -113,7 +113,7 @@ paths:
               schema:
                 $ref: '#/components/schemas/ErrorResponse'
               example:
-                detail: Error retrieving user sessions: ...
+                detail: 'Error retrieving user sessions: ...'
   /v1/ai/session/{id_session}/messages:
     get:
       tags:
@@ -165,7 +165,7 @@ paths:
               schema:
                 $ref: '#/components/schemas/ErrorResponse'
               example:
-                detail: Error retrieving session messages: ...
+                detail: 'Error retrieving session messages: ...'
   /aether-api/v1/ai/user/session/message:
     post:
       tags:
@@ -289,7 +289,7 @@ paths:
               schema:
                 $ref: '#/components/schemas/ErrorResponse'
               example:
-                detail: Error processing report: ...
+                detail: 'Error processing report: ...'
         '500':
           description: Unexpected server error during report processing.
           content:
@@ -297,7 +297,7 @@ paths:
               schema:
                 $ref: '#/components/schemas/ErrorResponse'
               example:
-                detail: Error processing report: ...
+                detail: 'Error processing report: ...'
 components:
   schemas:
     ErrorResponse:
