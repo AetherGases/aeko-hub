@@ -66,6 +66,27 @@ async def lifespan(app: FastAPI):
     yield
     mongo_client.close()
 
-app = FastAPI(lifespan=lifespan)
+OPENAPI_TAGS = [
+    {
+        "name": "Users",
+        "description": "Endpoints for retrieving user profile data used by the AI gateway.",
+    },
+    {
+        "name": "Sessions",
+        "description": "Endpoints for listing sessions and session messages.",
+    },
+    {
+        "name": "Reports",
+        "description": "Endpoints for generating AI-assisted reports and improvement plans.",
+    },
+]
+
+app = FastAPI(
+    lifespan=lifespan,
+    title="Aether AI Gateway",
+    version="1.0.0",
+    description="HTTP API for user, session, and report workflows in the Aether core gateway.",
+    openapi_tags=OPENAPI_TAGS,
+)
 app.include_router(user_router)
 app.include_router(session_router)

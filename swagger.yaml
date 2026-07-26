@@ -1,0 +1,395 @@
+openapi: 3.0.3
+info:
+  title: Aether AI Gateway
+  version: 1.0.0
+  description: HTTP API for user, session, and report workflows in the Aether core gateway.
+servers:
+  - url: /
+tags:
+  - name: Users
+    description: Endpoints for retrieving user profile data used by the AI gateway.
+  - name: Sessions
+    description: Endpoints for listing sessions, reading messages, and sending AI messages.
+  - name: Reports
+    description: Endpoints for generating AI-assisted reports and improvement plans.
+paths:
+  /v1/ai/user/{id_external_user}:
+    get:
+      tags:
+        - Users
+      summary: Get user by external identifier
+      description: Retrieves a user profile using the external user identifier stored in the core database.
+      operationId: getUserByExternalId
+      parameters:
+        - name: id_external_user
+          in: path
+          required: true
+          description: External user identifier.
+          schema:
+            type: integer
+          example: 12345
+      responses:
+        '200':
+          description: User profile found.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/UserResponseData'
+              example:
+                id_external_user: 12345
+                role: analyst
+                usecase: report_generation
+        '404':
+          description: User not found.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+              example:
+                detail: User with id_external_user 12345 not found.
+        '503':
+          description: Database connection is unavailable.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+              example:
+                detail: Database is not initialized
+        '500':
+          description: Unexpected server error.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+              example:
+                detail: 'Error retrieving user: Error fetching user from database: ...'
+  /v1/ai/sessions/user/{id_user}:
+    get:
+      tags:
+        - Sessions
+      summary: List sessions for a user
+      description: Returns all sessions associated with the internal user identifier.
+      operationId: listUserSessions
+      parameters:
+        - name: id_user
+          in: path
+          required: true
+          description: Internal user identifier.
+          schema:
+            type: string
+          example: 65a8b3d6c0f8e1d7f4b2c010
+      responses:
+        '200':
+          description: Sessions found for the user.
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/SessionResponseData'
+              example:
+                - id: 65a8b3d6c0f8e1d7f4b2c001
+                  name: Weekly emissions review
+        '404':
+          description: No sessions found for the given user.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+              example:
+                detail: No sessions found for user with id_user 65a8b3d6c0f8e1d7f4b2c010.
+        '503':
+          description: Database connection is unavailable.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+              example:
+                detail: Database is not initialized
+        '500':
+          description: Unexpected server error.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+              example:
+                detail: 'Error retrieving user sessions: ...'
+  /v1/ai/session/{id_session}/messages:
+    get:
+      tags:
+        - Sessions
+      summary: List messages for a session
+      description: Returns the message history stored for a specific session.
+      operationId: listSessionMessages
+      parameters:
+        - name: id_session
+          in: path
+          required: true
+          description: Internal session identifier.
+          schema:
+            type: string
+          example: 65a8b3d6c0f8e1d7f4b2c001
+      responses:
+        '200':
+          description: Messages found for the session.
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/MessageResponseData'
+              example:
+                - input_message: Summarize this session.
+                  output_message: Here is the summary.
+                  submitted_at: '2026-07-26T14:30:00Z'
+        '400':
+          description: The session identifier is invalid or unavailable.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+              example:
+                detail: No session found with id_session 65a8b3d6c0f8e1d7f4b2c001.
+        '503':
+          description: Database connection is unavailable.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+              example:
+                detail: Database is not initialized
+        '500':
+          description: Unexpected server error.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+              example:
+                detail: 'Error retrieving session messages: ...'
+  /aether-api/v1/ai/user/session/message:
+    post:
+      tags:
+        - Sessions
+      summary: Send a message to the AI session
+      description: Creates or continues a session message exchange using the current Aeko messenger instance.
+      operationId: sendSessionMessage
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/SendMessageRequest'
+            example:
+              id_session: 65a8b3d6c0f8e1d7f4b2c001
+              input: Summarize this session.
+              id_user: 65a8b3d6c0f8e1d7f4b2c010
+      responses:
+        '200':
+          description: Message processed successfully.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/MessageResponseData'
+              example:
+                input_message: Summarize this session.
+                output_message: Here is the summary.
+                submitted_at: '2026-07-26T14:30:00Z'
+        '400':
+          description: The request body is missing required fields or is invalid.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+              example:
+                detail: User is not allowed to access this session.
+        '500':
+          description: Aeko messenger is not initialized or an unexpected error occurred.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+              example:
+                detail: Aeko messenger is not initialized
+  /aether-api/v1/ai/report:
+    post:
+      tags:
+        - Reports
+      summary: Generate an improvement plan report
+      description: Analyzes an input report, persists the derived improvement plan, and stores the generated output report in S3.
+      operationId: generateImprovementPlanReport
+      parameters:
+        - name: s3
+          in: query
+          required: true
+          description: Input report bucket or S3 path used to load the source file.
+          schema:
+            type: string
+          example: reports/input/65a8b3d6c0f8e1d7f4b2c010/input.pdf
+        - name: id_user
+          in: query
+          required: true
+          description: Internal user identifier responsible for the report.
+          schema:
+            type: string
+          example: 65a8b3d6c0f8e1d7f4b2c010
+        - name: id_gas_reduction
+          in: query
+          required: false
+          description: Optional external gas reduction identifier used as context.
+          schema:
+            type: integer
+            nullable: true
+          example: 9001
+        - name: id_department
+          in: query
+          required: false
+          description: Optional department identifier associated with the output report.
+          schema:
+            type: integer
+            nullable: true
+          example: 12
+        - name: id_external_user_owner
+          in: query
+          required: false
+          description: Optional external owner identifier for the output report.
+          schema:
+            type: integer
+            nullable: true
+          example: 12345
+        - name: id_external_user_validator
+          in: query
+          required: false
+          description: Optional external validator identifier for the output report.
+          schema:
+            type: integer
+            nullable: true
+          example: 12346
+        - name: id_external_input_report
+          in: query
+          required: false
+          description: Optional external input report identifier.
+          schema:
+            type: integer
+            nullable: true
+          example: 777
+      responses:
+        '200':
+          description: Report generated successfully.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ReportResponseData'
+              example:
+                s3_path: s3://reports-bucket/reports/output/65a8b3d6c0f8e1d7f4b2c010/202607261430.pdf
+                file_name: 202607261430.pdf
+        '400':
+          description: One or more request parameters are invalid.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+              example:
+                detail: 'Error processing report: ...'
+        '500':
+          description: Unexpected server error during report processing.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+              example:
+                detail: 'Error processing report: ...'
+components:
+  schemas:
+    ErrorResponse:
+      type: object
+      properties:
+        detail:
+          type: string
+      required:
+        - detail
+    UserResponseData:
+      type: object
+      properties:
+        id_external_user:
+          type: integer
+          description: External identifier of the user.
+          example: 12345
+        role:
+          type: string
+          description: Role assigned to the user.
+          example: analyst
+        usecase:
+          type: string
+          description: User use case or profile category.
+          example: report_generation
+      required:
+        - id_external_user
+        - role
+        - usecase
+    SessionResponseData:
+      type: object
+      properties:
+        id:
+          type: string
+          description: Internal session identifier.
+          example: 65a8b3d6c0f8e1d7f4b2c001
+        name:
+          type: string
+          description: Human-readable session name.
+          example: Weekly emissions review
+      required:
+        - id
+        - name
+    MessageResponseData:
+      type: object
+      properties:
+        input_message:
+          type: string
+          description: Input text sent to the AI agent.
+          example: Summarize this session.
+        output_message:
+          type: string
+          description: Output returned by the AI agent.
+          example: Here is the summary.
+        submitted_at:
+          type: string
+          format: date-time
+          description: Timestamp when the message was submitted.
+          example: '2026-07-26T14:30:00Z'
+      required:
+        - input_message
+        - output_message
+        - submitted_at
+    SendMessageRequest:
+      type: object
+      required:
+        - id_session
+        - input
+        - id_user
+      properties:
+        id_session:
+          type: string
+          description: Optional session identifier. Omit or send an empty value to create a new session.
+          example: 65a8b3d6c0f8e1d7f4b2c001
+        input:
+          type: string
+          description: Message text to send to the AI agent.
+          example: Summarize this session.
+        id_user:
+          type: string
+          description: Internal user identifier.
+          example: 65a8b3d6c0f8e1d7f4b2c010
+    ReportResponseData:
+      type: object
+      properties:
+        s3_path:
+          type: string
+          description: S3 URI of the generated report.
+          example: s3://reports-bucket/reports/output/65a8b3d6c0f8e1d7f4b2c010/202607261430.pdf
+        file_name:
+          type: string
+          description: Generated PDF file name.
+          example: 202607261430.pdf
+      required:
+        - s3_path
+        - file_name
