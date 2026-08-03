@@ -4,7 +4,7 @@ from user.user import IService as IUserService
 
 class IRepository(ABC):
     @abstractmethod
-    def get_by_id_external_gas_reduction(self, id_external_gas_reduction) -> ImprovementPlan:
+    def get_by_id_external_inventory(self, id_external_inventory) -> ImprovementPlan:
         pass
 
     @abstractmethod
@@ -13,7 +13,7 @@ class IRepository(ABC):
 
 class IService(ABC):
     @abstractmethod
-    def get_by_id_external_gas_reduction(self, id_external_gas_reduction) -> ImprovementPlan:
+    def get_by_id_external_inventory(self, id_external_inventory) -> ImprovementPlan:
         pass
 
     @abstractmethod
@@ -21,7 +21,7 @@ class IService(ABC):
         self,
         s3: str,
         id_user: str,
-        id_gas_reduction: int | None,
+        id_inventory: int | None,
         user_service: IUserService,
         id_department: int | None,
         id_external_user_owner: int | None,

@@ -36,29 +36,29 @@ class Service(IService):
     def __init__(self, repository):
         self.repository = repository
 
-    def get_by_id_external_gas_reduction(self, id_external_gas_reduction) -> ImprovementPlan:
-        return self.repository.get_by_id_external_gas_reduction(id_external_gas_reduction)
+    def get_by_id_external_inventory(self, id_external_inventory) -> ImprovementPlan:
+        return self.repository.get_by_id_external_inventory(id_external_inventory)
 
-    def input_report(self, s3: str, id_user: str, id_gas_reduction: int, user_service: IUserService, id_department: int, id_external_user_owner: int, id_external_user_validator: int, id_external_input_report: int) -> str:
+    def input_report(self, s3: str, id_user: str, id_inventory: int, user_service: IUserService, id_department: int, id_external_user_owner: int, id_external_user_validator: int, id_external_input_report: int) -> str:
         report_bytes = get_pdf_bytes(s3, id_user)
 
         aeko_report_analyzer = AekoReportAnalyzer()
         context = None
-        id_external_gas_reduction = id_gas_reduction
-        if id_gas_reduction is None:
+        id_external_inventory = id_inventory
+        if id_inventory is None:
             aeko_report_analyzer.set_context(context)
         else:
-            gas_reduction_data = requests.get(f"https://api.example.com/gas_reduction/{id_gas_reduction}").json()
-            context = AekoGasReductionDTO(**gas_reduction_data)
+            inventory_data = requests.get(f"https://api.example.com/inventory/{id_inventory}").json()
+            context = AekoGasReductionDTO(**inventory_data)
             aeko_report_analyzer.set_context(context)
 
-        analysis_result, gas_reduction, projections = aeko_report_analyzer.analyze(report_bytes)
+        analysis_result, inventory, projections = aeko_report_analyzer.analyze(report_bytes)
 
-        if id_external_gas_reduction is None:
-            id_external_gas_reduction = requests.post("https://api.example.com/gas_reduction", json=gas_reduction.__dict__).json()["id"]
+        if id_external_inventory is None:
+            id_external_inventory = requests.post("https://api.example.com/inventory", json=inventory.__dict__).json()["id"]
 
         improvement_plan = improvement_plan_from_aeko_report_analysis_dto(analysis_result)
-        improvement_plan.id_external_gas_reduction = id_external_gas_reduction
+        improvement_plan.id_external_inventory = id_external_inventory
 
         self.repository.create(improvement_plan)
         user_service.create_user_memory(
@@ -70,51 +70,6 @@ class Service(IService):
             )
         )
 
-
-        # build output report
-        aeko_report_builder = AekoReportBuilder()
-        aeko_report_builder.set_result(analysis_result)
-
-        buffer = BytesIO()
-        doc = SimpleDocTemplate(buffer)
-
-        aeko_report_builder.build(doc)
-
-        buffer.seek(0)
-
-        time = datetime.now().strftime("%Y%m%d%H%M")
-
-        id_storage_file = requests.post(
-            "https://api.example.com/storage",
-            json={
-                "name": aeko_report_builder.get_report_name(),
-                "path": f"s3://{s3}/reports/output/{id_user}/{time}.pdf",
-            }
-        ).json()["id"]
-
-        requests.post(
-            "https://api.example.com/reports",
-            json={
-                "name": aeko_report_builder.get_report_name(),
-                "description": aeko_report_builder.get_report_description(),
-                "type": "output",
-                "id_storage_file": id_storage_file,
-                "id_department": id_department,
-                "id_owner_employee": id_external_user_owner,
-                "id_validator_employee": id_external_user_validator,
-                "id_input_report": id_external_input_report
-            }
-        )
-
-        s3_client.put_object(
-            Bucket=s3,
-            Key=f"reports/output/{id_user}/{time}.pdf",
-            Body=buffer,
-            ContentType="application/pdf"
-        )
-
-        return f"s3://{s3}/reports/output/{id_user}/{time}.pdf"
-        
 
 def get_pdf_bytes(bucket: str, key: str) -> bytes:
     response = s3_client.get_object(
