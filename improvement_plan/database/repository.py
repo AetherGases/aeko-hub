@@ -1,6 +1,6 @@
-from improvement_plan.improvement_plan import IRepository
-from improvement_plan.entity import ImprovementPlan
 from improvement_plan.database import query as q
+from improvement_plan.entity import ImprovementPlan
+from improvement_plan.improvement_plan import IRepository
 
 
 class Repository(IRepository):

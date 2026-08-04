@@ -1,4 +1,5 @@
 from abc import ABC, abstractmethod
+
 from improvement_plan.entity import ImprovementPlan
 
 class IRepository(ABC):

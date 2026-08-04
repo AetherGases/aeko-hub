@@ -1,5 +1,5 @@
-from improvement_plan.improvement_plan import IService
 from improvement_plan.entity import ImprovementPlan
+from improvement_plan.improvement_plan import IService
 
 class Service(IService):
     def __init__(self, repository):

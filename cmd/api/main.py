@@ -1,16 +1,16 @@
-from fastapi import FastAPI
 from contextlib import asynccontextmanager
-from dotenv import load_dotenv
-from pymongo import MongoClient
 import os
+import sys
+from unittest.mock import MagicMock
 
-from internal.http.user_handlers import router as user_router
+from dotenv import load_dotenv
+from fastapi import FastAPI
+from pymongo import MongoClient
+
 from internal.http.session_handlers import router as session_router
+from internal.http.user_handlers import router as user_router
 
 # Mocks ai sdk
-from unittest.mock import MagicMock
-import sys
-
 mock_aeko = MagicMock()
 
 mock_aeko.AekoMessenger = MagicMock()

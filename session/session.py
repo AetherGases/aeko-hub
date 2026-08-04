@@ -1,9 +1,10 @@
 from abc import ABC, abstractmethod
-from session.entity import Session, Message
 
 # Mocks ai sdk
-from unittest.mock import MagicMock
 import sys
+from unittest.mock import MagicMock
+
+from session.entity import Message, Session
 
 mock_aeko = MagicMock()
 

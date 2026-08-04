@@ -1,13 +1,12 @@
-from pydantic import BaseModel, Field
-
 from datetime import datetime
+
 from fastapi import APIRouter, Depends, HTTPException, Path, Request
+from pydantic import BaseModel, Field
 
 from session.database.repository import Repository
 from session.service import Service
 from session.session import IService
 
-from fastapi import APIRouter, Depends, HTTPException, Request
 from user.database.repository import Repository as UserRepository
 
 router = APIRouter(tags=["Sessions"])
@@ -110,8 +109,6 @@ def get_session_messages(
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     except Exception as exc:
         raise HTTPException(status_code=500, detail=f"Error retrieving session messages: {exc}") from exc
-
-from fastapi import APIRouter, Depends, HTTPException, Request
 
 @router.post(
     "/aether-api/v1/ai/user/session/message",
