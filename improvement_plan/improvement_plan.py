@@ -1,6 +1,5 @@
 from abc import ABC, abstractmethod
 from improvement_plan.entity import ImprovementPlan
-from user.user import IService as IUserService
 
 class IRepository(ABC):
     @abstractmethod
@@ -17,15 +16,5 @@ class IService(ABC):
         pass
 
     @abstractmethod
-    def input_report(
-        self,
-        s3: str,
-        id_user: str,
-        id_inventory: int | None,
-        user_service: IUserService,
-        id_department: int | None,
-        id_external_user_owner: int | None,
-        id_external_user_validator: int | None,
-        id_external_input_report: int | None,
-    ) -> str:
+    def create(self, improvement_plan: ImprovementPlan) -> ImprovementPlan:
         pass
