@@ -1,20 +1,27 @@
 from abc import ABC, abstractmethod
-from inventory_analysis.entity import InventoryAnalysis
+from typing import Any
 
-class IRepository(ABC):
-    @abstractmethod
-    def get_by_id_external_inventory(self, id_external_inventoru: int) -> InventoryAnalysis:
-        pass
-
-    @abstractmethod
-    def create(self, inventory_analysis: InventoryAnalysis) -> InventoryAnalysis:
-        pass
+from improvement_plan.improvement_plan import IService as IImprovementPlanService
+from user.user import IService as IUserService
 
 class IService(ABC):
     @abstractmethod
-    def get_by_id_external_inventory(self, id_external_inventory: int) -> InventoryAnalysis:
+    def input_inventory(
+        self,
+        s3: str,
+        id_user: str,
+        id_external_inventory_4context: int | None,
+        user_service: IUserService,
+        improvement_plan_service: IImprovementPlanService,
+    ) -> str:
+        pass
+
+
+class IRepository(ABC):
+    @abstractmethod
+    def get_excel_bytes(self, s3: str) -> bytes:
         pass
 
     @abstractmethod
-    def input_inventory(self, id_external_inventory: int) -> InventoryAnalysis:
+    def get_external_inventory_context(self, id_external_inventory_4context: int) -> dict[str, Any]:
         pass

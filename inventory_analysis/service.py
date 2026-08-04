@@ -1,12 +1,13 @@
-    
-from inventory_analysis.inventory_analysis import IService
-from io import BytesIO
-import requests
-import boto3
+import sys
+from unittest.mock import MagicMock
+
+from improvement_plan.entity import ImprovementPlan
+from improvement_plan.improvement_plan import IService as IImprovementPlanService
+
+from inventory_analysis.inventory_analysis import IService, IRepository
+from user.user import IService as IUserService, UserMemory
 
 # Mocks ai sdk
-from unittest.mock import MagicMock
-import sys
 
 mock_aeko = MagicMock()
 
@@ -16,56 +17,42 @@ sys.modules["aeko_sdk"] = mock_aeko
 
 from aeko_sdk import AekoInventoryAnalyzer # type: ignore
 from aeko_sdk import AekoGasReductionDTO # type: ignore
-from aeko_sdk import AekoInventoryAnalysisDTO # type: ignore
-
-s3_client = boto3.client("s3")
+from aeko_sdk import AekoInventoryImprovementPlanDTO # type: ignore
 
 class Service(IService):
-    def input_inventory(self, s3: str, id_user: str, id_inventory: int, user_service: IUserService, id_department: int, id_external_user_owner: int, id_external_user_validator: int, id_external_input_inventory: int) -> str:
-        inventory_bytes = get_pdf_bytes(s3, id_user)
+    def __init__(self, repository: IRepository):
+        self.repository = repository
+
+    def input_inventory(self, s3: str, id_user: str, id_external_inventory_4context: int | None, user_service: IUserService, improvement_plan_service: IImprovementPlanService) -> str:
+        inventory_bytes = self.repository.get_excel_bytes(s3)
 
         aeko_inventory_analyzer = AekoInventoryAnalyzer()
-        context = None
-        id_external_inventory = id_inventory
-        if id_inventory is not None:
-            aeko_inventory_analyzer.set_context(context)
-        else:
-            inventory_data = requests.get(f"https://api.example.com/inventory/{id_inventory}").json()
+        if id_external_inventory_4context is not None:
+            inventory_data = self.repository.get_external_inventory_context(id_external_inventory_4context)
             context = AekoGasReductionDTO(**inventory_data)
             aeko_inventory_analyzer.set_context(context)
 
-        analysis_result, inventory, projections = aeko_inventory_analyzer.analyze(inventory_bytes)
+        inventory = aeko_inventory_analyzer.analyze(inventory_bytes)
+        improvement_plan = inventory.generate_improvement_plan()
 
-        if id_external_inventory is None:
-            id_external_inventory = requests.post("https://api.example.com/inventory", json=inventory.__dict__).json()["id"]
-
-        improvement_plan = improvement_plan_from_aeko_inventory_analysis_dto(analysis_result)
-        improvement_plan.id_external_inventory = id_external_inventory
-
-        self.repository.create(improvement_plan)
+        improvement_plan_service.create(improvement_plan_from_aeko_dto(improvement_plan))
         user_service.create_user_memory(
             UserMemory(
                 id=None,
                 id_user=id_user,
                 field="improvement_plan",
-                description=improvement_plan.__str__()
+                description=str(improvement_plan)
             )
         )
 
+        return str(improvement_plan)
 
-def get_pdf_bytes(bucket: str, key: str) -> bytes:
-    response = s3_client.get_object(
-        Bucket=bucket,
-        Key=key
+def improvement_plan_from_aeko_dto(dto: AekoInventoryImprovementPlanDTO) -> ImprovementPlan:
+    return ImprovementPlan(
+        id=None,
+        id_external_inventory=dto.id_external_inventory,
+        defined_problem=dto.defined_problem,
+        method=dto.method,
+        reasoning=dto.reasoning,
+        updated_at=None
     )
-
-    return response["Body"].read()
-
-def improvement_plan_from_aeko_inventory_analysis_dto(aeko_inventory_analysis_dto: AekoinventoryAnalysisDTO) -> ImprovementPlan:
-    improvement_plan = ImprovementPlan(
-        defined_problem=aeko_inventory_analysis_dto.defined_problem,
-        method=aeko_inventory_analysis_dto.method,
-        reasoning=aeko_inventory_analysis_dto.reasoning,
-        updated_at=datetime.now()
-    )
-    return improvement_plan
