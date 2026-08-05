@@ -44,7 +44,9 @@ class Repository(IRepository):
                     id=str(memory["_id"]),
                     id_user=memory["id_user"],
                     field=memory["field"],
-                    description=memory["description"]
+                    description=memory["description"],
+                    created_at=memory.get("created_at"),
+                    expires_at=memory.get("expires_at")
                 ) for memory in memories_data
             ]
         except Exception as e:

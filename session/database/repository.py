@@ -74,5 +74,7 @@ def session_from_data(data: dict) -> Session:
         id=str(data["_id"]),
         id_user=str(data["id_user"]),
         name=data["name"],
-        messages=data.get("messages", [])
+        messages=data.get("messages", []),
+        created_at=data.get("created_at"),
+        updated_at=data.get("updated_at")
     )
