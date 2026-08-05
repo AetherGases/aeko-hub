@@ -1,6 +1,6 @@
-from session.session import IRepository
-from session.entity import Session, Message
 from session.database import query as q
+from session.entity import Message, Session
+from session.session import IRepository
 
 from user.user import IRepository as IUserRepository
 

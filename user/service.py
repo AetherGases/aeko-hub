@@ -1,5 +1,5 @@
-from user.user import IService
 from user.entity import User, UserMemory
+from user.user import IService
 
 class Service(IService):
     def __init__(self, repository):

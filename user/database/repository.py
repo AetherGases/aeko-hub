@@ -1,6 +1,6 @@
-from user.user import IRepository
-from user.entity import User, UserMemory
 from user.database import query as q
+from user.entity import User, UserMemory
+from user.user import IRepository
 
 class Repository(IRepository):
     def __init__(self, db):

@@ -1,12 +1,11 @@
-from pydantic import BaseModel, Field
-
 from datetime import datetime
+
+from fastapi import APIRouter, Depends, HTTPException, Query, Request
+from pydantic import BaseModel, Field
 
 from session.database.repository import Repository
 from session.service import Service
 from session.session import IService
-
-from fastapi import APIRouter, Depends, HTTPException, Query, Request
 
 from user.database.repository import Repository as UserRepository
 from user.service import Service as UserService

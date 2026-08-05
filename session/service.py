@@ -1,6 +1,6 @@
 # Mocks ai sdk
-from unittest.mock import MagicMock
 import sys
+from unittest.mock import MagicMock
 
 mock_aeko = MagicMock()
 
@@ -12,8 +12,8 @@ from aeko_sdk import AekoMessenger # type: ignore
 from aeko_sdk import AekoMessageDTO # type: ignore
 
 
-from session.session import IService
 from session.entity import Session, Message
+from session.session import IService
 
 from user.user import IRepository as IUserRepository
 
