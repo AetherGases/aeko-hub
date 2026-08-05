@@ -2,16 +2,16 @@ openapi: 3.0.3
 info:
   title: Aether AI Gateway
   version: 1.0.0
-  description: HTTP API for user, session, and report workflows in the Aether core gateway.
+  description: HTTP API for user, session, and improvement plan report workflows in the Aether core gateway.
 servers:
   - url: /
 tags:
   - name: Users
     description: Endpoints for retrieving user profile data used by the AI gateway.
   - name: Sessions
-    description: Endpoints for listing sessions, reading messages, and sending AI messages.
+    description: Endpoints for listing sessions, reading message history, and sending AI messages.
   - name: Reports
-    description: Endpoints for generating AI-assisted reports and improvement plans.
+    description: Endpoints for generating AI-assisted improvement plan reports and persisting output artifacts.
 paths:
   /v1/ai/user/{id_external_user}:
     get:
