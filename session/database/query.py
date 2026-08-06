@@ -1,3 +1,5 @@
+from datetime import datetime
+
 from bson import ObjectId
 
 
@@ -65,25 +67,34 @@ def get_user_amount_of_messages_query(id_user: str, id_session: str) -> tuple[di
     }
 
 def get_save_message_query(input: str, output: str, llm: str, input_tokens: int, output_tokens: int) -> dict:
+    now = datetime.utcnow()
+
     query = {
         "$push": {
             "messages": {
                 "input": input,
                 "output": output,
-                "submitted_at": {"$currentDate": {"$type": "date"}},
+                "submitted_at": now,
                 "llm": llm,
                 "input_tokens": input_tokens,
                 "output_tokens": output_tokens
             }
+        },
+        "$set": {
+            "updated_at": now
         }
     }
 
     return query
 
 def get_create_session_query(id_user: str) -> dict:
+    now = datetime.utcnow()
+
     query = {
         "id_user": id_user,
-        "messages": []
+        "messages": [],
+        "created_at": now,
+        "updated_at": now
     }
 
     return query
