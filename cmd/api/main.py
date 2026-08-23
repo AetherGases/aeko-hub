@@ -1,7 +1,5 @@
 from contextlib import asynccontextmanager
 import os
-import sys
-from unittest.mock import MagicMock
 
 from dotenv import load_dotenv
 from fastapi import FastAPI
@@ -11,15 +9,16 @@ from internal.http.improvement_plan_handlers import router as improvement_plan_r
 from internal.http.session_handlers import router as session_router
 from internal.http.user_handlers import router as user_router
 
-# Mocks ai sdk
-mock_aeko = MagicMock()
-
-mock_aeko.AekoMessenger = MagicMock()
-
-sys.modules["aeko_sdk"] = mock_aeko
-
-from aeko_sdk import AekoMessenger # type: ignore
-from aeko_sdk import AekoMessageDTO # type: ignore
+# Single entry point for all aeko_sdk imports. Every other module receives
+# SDK instances/DTOs through dependency injection instead of importing the
+# package directly.
+from aeko_sdk import (
+    AekoMessenger,
+    AekoMessageDTO,
+    AekoInventoryAnalyzer,
+    AekoGasReductionDTO,
+    AekoInventoryImprovementPlanDTO,
+)
 
 load_dotenv()
 
@@ -43,12 +42,17 @@ aeko_api_key_list = aeko_api_key_list.split(",") if aeko_api_key_list else []
 aeko_messenger = None
 
 
+def build_gas_reduction_context(data: dict) -> AekoGasReductionDTO:
+    return AekoGasReductionDTO(**data)
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     global mongo_client, db
     mongo_client = MongoClient(MONGO_URI)
     db = mongo_client[DB_NAME]
     app.state.db = db
+
     aeko_messenger = AekoMessenger()
     aeko_messenger.config(models=aeko_model_list, api_keys=aeko_api_key_list)
     aeko_messenger.set_tools(
@@ -59,6 +63,10 @@ async def lifespan(app: FastAPI):
         continuous_improvement_coordinator_tools=AEKO_CONTINOUS_IMPROVEMENT_COORDINATOR_TOOLS,
     )
     app.state._state["aeko_messenger"] = aeko_messenger
+
+    aeko_inventory_analyzer = AekoInventoryAnalyzer()
+    app.state._state["aeko_inventory_analyzer"] = aeko_inventory_analyzer
+    app.state._state["build_gas_reduction_context"] = build_gas_reduction_context
     try:
         db.command("ping")
     except Exception as exc:
