@@ -1,17 +1,3 @@
-# Mocks ai sdk
-import sys
-from unittest.mock import MagicMock
-
-mock_aeko = MagicMock()
-
-mock_aeko.AekoMessenger = MagicMock()
-
-sys.modules["aeko_sdk"] = mock_aeko
-
-from aeko_sdk import AekoMessenger # type: ignore
-from aeko_sdk import AekoMessageDTO # type: ignore
-
-
 from session.entity import Session, Message
 from session.session import IService
 
@@ -37,7 +23,7 @@ class Service(IService):
         except Exception as e:
             raise RuntimeError(f"Error retrieving session messages: {e}")
 
-    def send_message(self, id_session: str, input: str, id_user: str, aeko_messenger: AekoMessenger, user_repository: IUserRepository) -> Message:
+    def send_message(self, id_session: str, input: str, id_user: str, aeko_messenger, user_repository: IUserRepository) -> Message:
         try:
             if not id_session:
                 id_session = self.repository.create_session(id_user, user_repository)
@@ -74,7 +60,7 @@ class Service(IService):
         except Exception as e:
             raise RuntimeError(f"Error validating session and user allowance: {e}")
 
-def _internal_message_from_aeko_message_dto(dto: AekoMessageDTO) -> Message:
+def _internal_message_from_aeko_message_dto(dto) -> Message:
     return Message(
         input=dto.input,
         output=dto.output,

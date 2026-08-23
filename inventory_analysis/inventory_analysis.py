@@ -13,6 +13,8 @@ class IService(ABC):
         id_external_inventory_4context: int | None,
         user_service: IUserService,
         improvement_plan_service: IImprovementPlanService,
+        aeko_inventory_analyzer,
+        build_gas_reduction_context,
     ) -> str:
         pass
 

@@ -1,18 +1,6 @@
 from abc import ABC, abstractmethod
 
-# Mocks ai sdk
-import sys
-from unittest.mock import MagicMock
-
 from session.entity import Message, Session
-
-mock_aeko = MagicMock()
-
-mock_aeko.AekoMessenger = MagicMock()
-
-sys.modules["aeko_sdk"] = mock_aeko
-
-from aeko_sdk import AekoMessenger # type: ignore
 
 
 class IRepository(ABC):
@@ -38,7 +26,7 @@ class IService(ABC):
         pass
 
     @abstractmethod
-    def send_message(self, id_session: str, input: str, id_user: str, aeko_messenger: AekoMessenger) -> Message:
+    def send_message(self, id_session: str, input: str, id_user: str, aeko_messenger) -> Message:
         pass
 
     @abstractmethod

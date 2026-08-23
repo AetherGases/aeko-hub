@@ -24,3 +24,6 @@ TestResults.xml
 
 __pycache__/
 .env
+
+CLAUDE.md
+AGENT_DOCS/
