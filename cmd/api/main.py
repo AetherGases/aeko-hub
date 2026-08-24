@@ -9,64 +9,104 @@ from internal.http.improvement_plan_handlers import router as improvement_plan_r
 from internal.http.session_handlers import router as session_router
 from internal.http.user_handlers import router as user_router
 
-# Single entry point for all aeko_sdk imports. Every other module receives
-# SDK instances/DTOs through dependency injection instead of importing the
+# Single entry point for all aeko imports. Every other module receives SDK
+# factories/values through dependency injection instead of importing the
 # package directly.
-from aeko_sdk import (
-    AekoMessenger,
-    AekoMessageDTO,
+from aeko import (
+    AGENT_NAMES,
+    Aeko,
     AekoInventoryAnalyzer,
-    AekoGasReductionDTO,
-    AekoInventoryImprovementPlanDTO,
+    AekoMessenger,
+    AekoTool,
 )
 
 load_dotenv()
 
 MONGO_URI = os.getenv("MONGO_URI")
 DB_NAME = os.getenv("DB_NAME")
-aeko_model_list = os.getenv("AEKO_MODEL_LIST")
-aeko_api_key_list = os.getenv("AEKO_API_KEY_LIST")
 
-# Tools must follow the defined interfaces in Aeko SDK
-AEKO_FAQ_TOOLS = [] # Fill up later....
-AEKO_REPORT_ANALYST_TOOLS = [] # Fill up later....
-AEKO_POLLUTANTS_ANALYST_TOOLS = [] # Fill up later....
-AEKO_GREEN_GASES_ANALYST_TOOLS = [] # Fill up later....
-AEKO_CONTINOUS_IMPROVEMENT_COORDINATOR_TOOLS = [] # Fill up later....
+# The SDK never reads the environment on its own; the application owns its
+# configuration and passes it in through Aeko.config().
+GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
+AEKO_FAST_MODEL = os.getenv("AEKO_FAST_MODEL")
+AEKO_SLOW_MODEL = os.getenv("AEKO_SLOW_MODEL")
+AEKO_MAX_TOKENS = os.getenv("AEKO_MAX_TOKENS")
+AEKO_REPORT_MAX_TOKENS = os.getenv("AEKO_REPORT_MAX_TOKENS")
+
+# Tools are bound per agent. The keys are the SDK's routing keys and must be
+# written exactly as in AGENT_NAMES, accents included. Each entry is either a
+# bare LangChain tool or an AekoTool(tool=..., description=...).
+AEKO_TOOLS: dict[str, list] = {
+    "FAQ": [],  # Fill up later....
+    "Análista de inventários": [],  # Fill up later....
+    "Analista de Poluentes": [],  # Fill up later....
+    "Analista de Gases Verdes": [],  # Fill up later....
+    "Coordenador de Melhoria Contínua": [],  # Fill up later....
+}
 
 mongo_client = None
 db = None
 
-aeko_model_list = aeko_model_list.split(",") if aeko_model_list else []
-aeko_api_key_list = aeko_api_key_list.split(",") if aeko_api_key_list else []
-aeko_messenger = None
+def _optional_int(value: str | None) -> int | None:
+    """Read an optional numeric setting, leaving unset ones as `None`.
+
+    `None` is what tells the SDK to keep its own default.
+    """
+    return int(value) if value else None
 
 
-def build_gas_reduction_context(data: dict) -> AekoGasReductionDTO:
-    return AekoGasReductionDTO(**data)
+def build_gas_reduction_context(data: dict) -> str:
+    """Render the external gas reduction payload as the plain text the SDK wants.
+
+    `AekoInventoryAnalyzer.set_context()` takes free-form text describing the
+    previous report, so the dict coming from the external API is flattened into
+    readable `key: value` lines.
+    """
+    return "\n".join(f"{key}: {value}" for key, value in data.items())
+
+
+def configure_aeko() -> None:
+    """Process-wide SDK setup. Runs once, at startup, never per request."""
+    unknown_agents = set(AEKO_TOOLS) - set(AGENT_NAMES)
+    if unknown_agents:
+        raise RuntimeError(
+            f"Unknown Aeko agent names in AEKO_TOOLS: {sorted(unknown_agents)}. "
+            f"Valid names: {list(AGENT_NAMES)}"
+        )
+
+    Aeko.config(
+        GEMINI_API_KEY,
+        fast_model=AEKO_FAST_MODEL or None,
+        slow_model=AEKO_SLOW_MODEL or None,
+        max_tokens=_optional_int(AEKO_MAX_TOKENS),
+        report_max_tokens=_optional_int(AEKO_REPORT_MAX_TOKENS),
+    )
+    AekoMessenger.set_tools(AEKO_TOOLS)
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    """Open the database, configure the SDK, and publish both on `app.state`.
+
+    Everything here runs exactly once per process, before the first request:
+    the SDK rebuilds every agent on configuration, so doing it per request
+    would throw away warm agents under load. The connection is closed and
+    the SDK left configured when the app shuts down.
+    """
     global mongo_client, db
     mongo_client = MongoClient(MONGO_URI)
     db = mongo_client[DB_NAME]
     app.state.db = db
 
-    aeko_messenger = AekoMessenger()
-    aeko_messenger.config(models=aeko_model_list, api_keys=aeko_api_key_list)
-    aeko_messenger.set_tools(
-        faq_tools=AEKO_FAQ_TOOLS,
-        report_analytics_tools=AEKO_REPORT_ANALYST_TOOLS,
-        pollutants_analytics_tools=AEKO_POLLUTANTS_ANALYST_TOOLS,
-        green_gases_analytics_tools=AEKO_GREEN_GASES_ANALYST_TOOLS,
-        continuous_improvement_coordinator_tools=AEKO_CONTINOUS_IMPROVEMENT_COORDINATOR_TOOLS,
-    )
-    app.state._state["aeko_messenger"] = aeko_messenger
+    configure_aeko()
 
-    aeko_inventory_analyzer = AekoInventoryAnalyzer()
-    app.state._state["aeko_inventory_analyzer"] = aeko_inventory_analyzer
+    # Factories, not instances: both SDK entry points carry per-session mutable
+    # state (`prepare()` history, `set_context()`), so a shared instance would
+    # leak one request's context into the next.
+    app.state._state["aeko_messenger_factory"] = AekoMessenger
+    app.state._state["aeko_inventory_analyzer_factory"] = AekoInventoryAnalyzer
     app.state._state["build_gas_reduction_context"] = build_gas_reduction_context
+    app.state._state["aeko_tool"] = AekoTool
     try:
         db.command("ping")
     except Exception as exc:
@@ -91,9 +131,9 @@ OPENAPI_TAGS = [
 
 app = FastAPI(
     lifespan=lifespan,
-    title="Aether AI Gateway",
+    title="Aeko API",
     version="1.0.0",
-    description="HTTP API for user, session, and report workflows in the Aether core gateway.",
+    description="HTTP API for user, session, and report workflows in the Aeko core gateway.",
     openapi_tags=OPENAPI_TAGS,
 )
 app.include_router(user_router)
