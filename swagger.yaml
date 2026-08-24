@@ -210,6 +210,14 @@ paths:
                 $ref: '#/components/schemas/ErrorResponse'
               example:
                 detail: Aeko messenger is not initialized
+        '502':
+          description: The AI output guardrail rejected every draft, so there is no answer.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+              example:
+                detail: The output guardrail rejected every draft.
   /aether-api/v1/ai/report:
     post:
       tags:
