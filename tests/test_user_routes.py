@@ -17,24 +17,29 @@ ROUTE = "/v1/ai/user/{id_external_user}"
 
 class StubUserService:
     def __init__(self, user=None, error=None):
+        """Hold the user to return, or the error to raise."""
         self.user = user
         self.error = error
         self.calls = []
 
     def get_mongo_user(self, id_external_user):
+        """Record the lookup, then raise or return as configured."""
         self.calls.append(id_external_user)
         if self.error is not None:
             raise self.error
         return self.user
 
     def get_user_memories(self, id_user):
+        """Never reached: the router does not expose memories."""
         raise NotImplementedError
 
     def create_user_memory(self, user_memory):
+        """Never reached: the router does not expose memories."""
         raise NotImplementedError
 
 
 def build_client(service=None, db="fake-db"):
+    """Mount the Users router on a standalone app and return a client."""
     app = FastAPI()
     app.include_router(user_handlers.router)
     app.state.db = db
@@ -44,6 +49,7 @@ def build_client(service=None, db="fake-db"):
 
 
 def test_get_user_returns_profile():
+    """The profile is projected down to the three exposed fields."""
     service = StubUserService(
         user=User(id="65a8b3d6c0f8e1d7f4b2c010", id_external_user=12345, role="analyst", usecase="report_generation")
     )
@@ -58,6 +64,7 @@ def test_get_user_returns_profile():
 
 
 def test_get_user_forwards_the_path_parameter_as_int():
+    """The path segment reaches the service already coerced to an int."""
     service = StubUserService(user=User(id="1", id_external_user=999, role="admin", usecase="audit"))
     build_client(service).get(ROUTE.format(id_external_user=999))
 
@@ -65,6 +72,7 @@ def test_get_user_forwards_the_path_parameter_as_int():
 
 
 def test_get_user_maps_value_error_to_404():
+    """An unknown user is reported as not found."""
     service = StubUserService(error=ValueError("User not found."))
     response = build_client(service).get(ROUTE.format(id_external_user=404))
 
@@ -73,6 +81,7 @@ def test_get_user_maps_value_error_to_404():
 
 
 def test_get_user_maps_unexpected_error_to_500():
+    """Anything unexpected is reported as a server error, detail included."""
     service = StubUserService(error=RuntimeError("mongo exploded"))
     response = build_client(service).get(ROUTE.format(id_external_user=1))
 
@@ -90,6 +99,7 @@ def test_get_user_returns_503_when_database_is_not_initialized():
 
 @pytest.mark.parametrize("bad_id", ["not-an-int", "1.5"])
 def test_get_user_rejects_non_integer_identifier(bad_id):
+    """A non-integer path segment never reaches the service."""
     service = StubUserService(user=None)
     response = build_client(service).get(ROUTE.format(id_external_user=bad_id))
 

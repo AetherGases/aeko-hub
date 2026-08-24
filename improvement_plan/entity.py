@@ -9,6 +9,16 @@ class ImprovementPlan:
     updated_at: datetime | None
 
     def __init__(self, id: str | None = None, id_external_inventory: int | None = None, defined_problem: str = "", method: str = "", reasoning: str = "", updated_at: datetime | None = None):
+        """Build the plan the AI derived from a GHG inventory.
+
+        Args:
+            id: Internal identifier, `None` before the plan is stored.
+            id_external_inventory: Inventory the plan was derived from.
+            defined_problem: The emissions problem identified.
+            method: The approach recommended to tackle it.
+            reasoning: Why that approach was chosen.
+            updated_at: When the plan was last revised.
+        """
         self.id = id
         self.id_external_inventory = id_external_inventory
         self.defined_problem = defined_problem
@@ -17,6 +27,7 @@ class ImprovementPlan:
         self.updated_at = updated_at
 
     def __str__(self) -> str:
+        """Render every field, for logs and for storing the plan as a memory."""
         return (
             "ImprovementPlan("
             f"id={self.id}, "

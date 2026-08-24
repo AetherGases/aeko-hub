@@ -6,9 +6,16 @@ from user.user import IRepository as IUserRepository
 
 class Repository(IRepository):
     def __init__(self, db):
+        """Hold the Mongo database handle every query below runs against."""
         self.db = db
 
     def get_user_sessions(self, id_user: str) -> list[Session]:
+        """List every session belonging to a user.
+
+        Raises:
+            ValueError: the user owns no sessions.
+            RuntimeError: the lookup itself failed.
+        """
         try:
             query, projection = q.get_user_sessions_query(id_user)
             sessions_data = self.db["session"].find(query, projection)
@@ -20,8 +27,16 @@ class Repository(IRepository):
             raise e
         except Exception as e:
             raise RuntimeError(f"Error fetching user sessions from database: {e}")
-        
+
     def get_session_messages_count(self, id_session: str) -> int:
+        """Count the messages already exchanged in a session.
+
+        Counted server-side so the history never crosses the wire.
+
+        Raises:
+            ValueError: no session carries that identifier.
+            RuntimeError: the lookup itself failed.
+        """
         try:
             query, projection = q.get_session_messages_count_query(id_session)
             session_data = self.db["session"].find_one(query, projection)
@@ -34,10 +49,22 @@ class Repository(IRepository):
             raise RuntimeError(f"Error fetching session messages from database: {e}")
 
     def create_session(self, id_user: str, user_repository: IUserRepository) -> str:
+        """Open an empty session for a user.
+
+        Args:
+            id_user: Internal identifier of the owner.
+            user_repository: Used to confirm the owner exists first.
+
+        Returns:
+            The new session's identifier.
+
+        Raises:
+            RuntimeError: the user does not exist, or the write failed.
+        """
         try:
             if not user_repository.get_user_by_id(id_user):
                 raise ValueError(f"User with id_user {id_user} does not exist.")
-            
+
             query = q.get_create_session_query(id_user)
             result = self.db["session"].insert_one(query)
             return str(result.inserted_id)
@@ -46,6 +73,11 @@ class Repository(IRepository):
 
 
     def save_message(self, id_session: str, message: Message) -> None:
+        """Append one exchange to a session's history.
+
+        Raises:
+            RuntimeError: the write failed.
+        """
         try:
             query = q.get_save_message_query(
                 input=message.input,
@@ -59,6 +91,11 @@ class Repository(IRepository):
             raise RuntimeError(f"Error saving message to database: {e}")
 
 def message_from_data(data: dict) -> Message:
+    """Build a `Message` from its stored document.
+
+    Tolerates the field names left behind by older writes, including the
+    `ouput` typo.
+    """
     return Message(
         input=data.get("input_message", data.get("input", "")),
         output=data.get("output_message", data.get("output", data.get("ouput", ""))),
@@ -70,6 +107,7 @@ def message_from_data(data: dict) -> Message:
 
 
 def session_from_data(data: dict) -> Session:
+    """Build a `Session` from its stored document."""
     return Session(
         id=str(data["_id"]),
         id_user=str(data["id_user"]),

@@ -17,6 +17,11 @@ class UserResponseData(BaseModel):
 
 
 def get_user_service(request: Request) -> IService:
+    """Build the user service for this request, on the app's database.
+
+    Raises:
+        HTTPException: 503 when the lifespan never opened a connection.
+    """
     database = request.app.state.db
     if database is None:
         raise HTTPException(status_code=503, detail="Database is not initialized")
@@ -50,6 +55,10 @@ def get_user(
     id_external_user: int = Path(..., description="External user identifier.", example=12345),
     service: IService = Depends(get_user_service),
 ) -> UserResponseData:
+    """Return the profile behind an external user identifier.
+
+    Maps `ValueError` to 404 and anything unexpected to 500.
+    """
     try:
         user = service.get_mongo_user(id_external_user)
         return UserResponseData(

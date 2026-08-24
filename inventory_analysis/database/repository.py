@@ -9,6 +9,15 @@ s3_client = boto3.client("s3")
 
 class Repository(IRepository):
     def get_excel_bytes(self, s3: str) -> bytes:
+        """Download the raw inventory workbook from S3.
+
+        Args:
+            s3: Either `s3://bucket/key` or a bare `bucket/key`.
+
+        Raises:
+            RuntimeError: the reference is malformed, or the object could
+                not be fetched.
+        """
         try:
             bucket, key = _normalize_s3_reference(s3)
             response = s3_client.get_object(
@@ -20,6 +29,11 @@ class Repository(IRepository):
             raise RuntimeError(f"Error fetching inventory file from S3: {e}")
 
     def get_external_inventory_context(self, id_external_inventory_4context: int) -> dict:
+        """Fetch a previous inventory's figures from the external API.
+
+        Raises:
+            RuntimeError: the request failed or returned an error status.
+        """
         try:
             response = requests.get(
                 f"https://api.example.com/inventory/{id_external_inventory_4context}",
@@ -32,6 +46,13 @@ class Repository(IRepository):
 
 
 def _normalize_s3_reference(s3: str) -> tuple[str, str]:
+    """Split an S3 reference into its bucket and key.
+
+    Accepts both the `s3://bucket/key` URI and the bare `bucket/key` form.
+
+    Raises:
+        ValueError: either half is missing.
+    """
     if s3.startswith("s3://"):
         without_scheme = s3.removeprefix("s3://")
         bucket, _, key = without_scheme.partition("/")

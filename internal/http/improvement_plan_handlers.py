@@ -22,6 +22,11 @@ class ReportResponseData(BaseModel):
 
 
 def get_session_service(request: Request) -> IService:
+    """Build the session service for this request, on the app's database.
+
+    Raises:
+        HTTPException: 503 when the lifespan never opened a connection.
+    """
     database = request.app.state.db
     if database is None:
         raise HTTPException(status_code=503, detail="Database is not initialized")
@@ -59,6 +64,15 @@ def input_report(
     id_external_input_report: int | None = Query(None, description="Optional external input report identifier.", example=777),
     service: IService = Depends(get_session_service),
 ) -> ReportResponseData:
+    """Generate an improvement plan report and return where it was stored.
+
+    Maps `ValueError` to 400 and anything unexpected to 500.
+
+    WARNING: this route is unreachable — `improvement_plan_router` is never
+    registered on the app — and calls `input_report` on the session service,
+    which does not implement it. The inventory flow itself lives in
+    `inventory_analysis.Service.input_inventory`.
+    """
     try:
         user_service = UserService(UserRepository(request.app.state.db))
         s3_path = service.input_report(
