@@ -9,10 +9,10 @@ from internal.http.improvement_plan_handlers import router as improvement_plan_r
 from internal.http.session_handlers import router as session_router
 from internal.http.user_handlers import router as user_router
 
-# Single entry point for all aeko_sdk imports. Every other module receives
+# Single entry point for all aeko imports. Every other module receives
 # SDK instances/DTOs through dependency injection instead of importing the
 # package directly.
-from aeko_sdk import (
+from aeko import (
     AekoMessenger,
     AekoMessageDTO,
     AekoInventoryAnalyzer,
@@ -98,3 +98,4 @@ app = FastAPI(
 )
 app.include_router(user_router)
 app.include_router(session_router)
+app.include_router(improvement_plan_router)

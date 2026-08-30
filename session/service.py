@@ -1,3 +1,5 @@
+from datetime import datetime
+
 from session.entity import Session, Message
 from session.session import IService
 
@@ -32,7 +34,9 @@ class Service(IService):
             self._validate_session_and_user_allowance(id_session, id_user)
 
             aeko_messenger.prepare(id_user, id_session)
-            message, new_name = _internal_message_from_aeko_message_dto(aeko_messenger.send_message(input))
+            response = aeko_messenger.send_message(input)
+            message = _internal_message_from_aeko_message_dto(response)
+            new_name = getattr(response, "name", None)
 
             self.repository.save_message(id_session, message)
 
@@ -64,6 +68,7 @@ def _internal_message_from_aeko_message_dto(dto) -> Message:
     return Message(
         input=dto.input,
         output=dto.output,
+        submitted_at=getattr(dto, "submitted_at", None) or datetime.utcnow(),
         llm=dto.llm,
         input_tokens=dto.input_tokens,
         output_tokens=dto.output_tokens

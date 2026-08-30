@@ -2,7 +2,7 @@
 
 The app is started through its real lifespan, with only two seams faked:
 
-* `aeko_sdk` — an external package, replaced suite-wide by `tests/fake_aeko_sdk.py`
+* `aeko` — an external package, replaced suite-wide by `tests/fake_aeko.py`
 * `pymongo.MongoClient` — replaced by an in-memory double
 
 Everything else is production code: the real routers, the real dependency
@@ -11,6 +11,7 @@ in-memory repositories because the concrete repositories still reference
 query helpers that do not exist yet (see the xfail tests at the bottom).
 """
 
+import re
 from datetime import datetime
 from pathlib import Path
 
@@ -155,14 +156,17 @@ def test_lifespan_pings_the_database_and_closes_the_client(api_main):
     assert client.closed is True
 
 
+IMPORTS_THE_SDK = re.compile(r"^\s*(?:from|import)\s+aeko\b", re.MULTILINE)
+
+
 def test_only_the_entry_point_imports_the_sdk():
-    """Guards the refactor: `aeko_sdk` must be imported in one place only."""
+    """Guards the refactor: `aeko` must be imported in one place only."""
     ignored = {"tests", ".git", ".venv", "venv", "env", "site-packages", "__pycache__"}
     importers = sorted(
         str(path.relative_to(REPO_ROOT)).replace("\\", "/")
         for path in REPO_ROOT.rglob("*.py")
         if ignored.isdisjoint(path.parts)
-        and "aeko_sdk" in path.read_text(encoding="utf-8")
+        and IMPORTS_THE_SDK.search(path.read_text(encoding="utf-8"))
     )
 
     assert importers == ["cmd/api/main.py"]
@@ -202,13 +206,8 @@ def test_journey_unknown_user_is_404(live_app):
 
 
 # ---------------------------------------------------------------------------
-# Known gaps — these document intended behaviour that does not work yet.
+# Behaviour that used to be broken and is now wired end to end.
 # ---------------------------------------------------------------------------
-@pytest.mark.xfail(
-    reason="session.service.Service.send_message unpacks a Message into two values "
-    "and builds Message without the required submitted_at",
-    strict=True,
-)
 def test_send_message_completes_the_round_trip(live_app):
     client, api_main, _, session_repository = live_app
 
@@ -223,7 +222,6 @@ def test_send_message_completes_the_round_trip(live_app):
     assert len(session_repository.get_session_messages("s1")) == 2
 
 
-@pytest.mark.xfail(reason="improvement_plan_router is imported but never registered on the app", strict=True)
 def test_report_route_is_registered(live_app):
     client, _, _, _ = live_app
 

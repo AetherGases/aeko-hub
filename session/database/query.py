@@ -2,23 +2,45 @@ from datetime import datetime
 
 from bson import ObjectId
 
+SESSION_PROJECTION = {
+    "_id": 1,
+    "id_user": 1,
+    "name": 1,
+    "created_at": 1,
+    "updated_at": 1,
+}
 
-def get_session_messages_count_query(id_session: str) -> tuple[dict, dict]:
-    normalized_id_session = id_session
-    if isinstance(id_session, str):
+def _normalize(identifier):
+    if isinstance(identifier, str):
         try:
-            normalized_id_session = ObjectId(id_session)
+            return ObjectId(identifier)
         except Exception:
-            normalized_id_session = id_session
+            return identifier
+    return identifier
 
-    query = {
+def get_session_filter(id_session: str) -> dict:
+    return {
         "$or": [
             {"_id": id_session},
-            {"_id": normalized_id_session},
+            {"_id": _normalize(id_session)},
         ]
     }
 
-    return query, {
+def get_session_query(id_session: str) -> tuple[dict, dict]:
+    return get_session_filter(id_session), SESSION_PROJECTION
+
+def get_user_sessions_query(id_user: str) -> tuple[dict, dict]:
+    query = {
+        "$or": [
+            {"id_user": id_user},
+            {"id_user": _normalize(id_user)},
+        ]
+    }
+
+    return query, SESSION_PROJECTION
+
+def get_session_messages_count_query(id_session: str) -> tuple[dict, dict]:
+    return get_session_filter(id_session), {
         "_id": 0,
         "messages_count": {
             "$size": "$messages"
@@ -26,44 +48,11 @@ def get_session_messages_count_query(id_session: str) -> tuple[dict, dict]:
     }
 
 def get_session_messages_query(id_session: str) -> tuple[dict, dict]:
-    normalized_id_session = id_session
-    if isinstance(id_session, str):
-        try:
-            normalized_id_session = ObjectId(id_session)
-        except Exception:
-            normalized_id_session = id_session
-
-    query = {
-        "$or": [
-            {"_id": id_session},
-            {"_id": normalized_id_session},
-        ]
-    }
-
-    return query, {
+    return get_session_filter(id_session), {
         "_id": 0,
         "messages.input": 1,
         "messages.output": 1,
         "messages.submitted_at": 1,
-    }
-
-def get_user_amount_of_messages_query(id_user: str, id_session: str) -> tuple[dict, dict]:
-    normalized_id_user = id_user
-    if isinstance(id_user, str):
-        try:
-            normalized_id_user = ObjectId(id_user)
-        except Exception:
-            normalized_id_user = id_user
-
-    query = {
-        "$or": [
-            {"id_user": id_user},
-            {"id_user": normalized_id_user},
-        ]
-    }
-
-    return query, {
-        "count": { "$sum": 1 }
     }
 
 def get_save_message_query(input: str, output: str, llm: str, input_tokens: int, output_tokens: int) -> dict:
@@ -87,11 +76,22 @@ def get_save_message_query(input: str, output: str, llm: str, input_tokens: int,
 
     return query
 
+def get_update_name_query(name: str) -> dict:
+    query = {
+        "$set": {
+            "name": name,
+            "updated_at": datetime.utcnow()
+        }
+    }
+
+    return query
+
 def get_create_session_query(id_user: str) -> dict:
     now = datetime.utcnow()
 
     query = {
         "id_user": id_user,
+        "name": "",
         "messages": [],
         "created_at": now,
         "updated_at": now

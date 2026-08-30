@@ -1,0 +1,13 @@
+[run]
+source = .
+omit =
+    tests/*
+    # Aeko integration: the inventory analysis flow is driven by the Aeko
+    # analyzer and is out of scope for this test suite.
+    inventory_analysis/inventory_analysis.py
+    inventory_analysis/service.py
+
+[report]
+show_missing = True
+exclude_also =
+    @(abc\.)?abstractmethod
