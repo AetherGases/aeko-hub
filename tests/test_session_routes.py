@@ -2,10 +2,11 @@
 
 The service layer is replaced through `app.dependency_overrides`, so these
 tests cover the HTTP contract only: status codes, response shape, error
-mapping, and the dependency injection of the Aeko messenger held on
+mapping, and the dependency injection of the SDK factories held on
 `app.state`.
 """
 
+import asyncio
 from datetime import datetime
 
 import pytest
@@ -14,6 +15,7 @@ from fastapi.testclient import TestClient
 
 from internal.http import session_handlers
 from session.entity import Message, Session
+from session.session import GuardrailRejectedError
 
 SESSIONS_ROUTE = "/v1/ai/sessions/user/{id_user}"
 MESSAGES_ROUTE = "/v1/ai/session/{id_session}/messages"
@@ -40,12 +42,14 @@ class StubSessionService:
     def get_session_messages(self, id_session):
         return self._run(id_session=id_session)
 
-    def send_message(self, id_session, input, id_user, aeko_messenger, user_repository):
+    def send_message(self, id_session, input, id_user, aeko_messenger_factory,
+                     aeko_session_factory, user_repository):
         return self._run(
             id_session=id_session,
             input=input,
             id_user=id_user,
-            aeko_messenger=aeko_messenger,
+            aeko_messenger_factory=aeko_messenger_factory,
+            aeko_session_factory=aeko_session_factory,
             user_repository=user_repository,
         )
 
@@ -60,14 +64,25 @@ class StubUserRepository:
         self.db = db
 
 
-def build_client(service=None, db="fake-db", aeko_messenger=None):
+def build_client(service=None, db="fake-db", factories=True):
+    """The lifespan publishes the two SDK factories; `factories=False` omits them."""
     app = FastAPI()
     app.include_router(session_handlers.router)
     app.state.db = db
-    app.state._state["aeko_messenger"] = aeko_messenger
+    if factories:
+        app.state._state["aeko_messenger_factory"] = MESSENGER_FACTORY
+        app.state._state["aeko_session_factory"] = SESSION_FACTORY
     if service is not None:
         app.dependency_overrides[session_handlers.get_session_service] = lambda: service
     return TestClient(app)
+
+
+def MESSENGER_FACTORY(user, memories):
+    raise AssertionError("the stub service never runs the SDK")
+
+
+def SESSION_FACTORY(session):
+    raise AssertionError("the stub service never runs the SDK")
 
 
 def make_message(input="Summarize this session.", output="Here is the summary."):
@@ -175,12 +190,10 @@ def patched_user_repository(monkeypatch):
     return StubUserRepository
 
 
-def test_send_message_returns_the_exchange(fake_sdk, patched_user_repository):
+def test_send_message_returns_the_exchange(patched_user_repository):
     service = StubSessionService(result=make_message())
-    messenger = fake_sdk.AekoMessenger()
-    client = build_client(service, aeko_messenger=messenger)
 
-    response = client.post(
+    response = build_client(service).post(
         SEND_ROUTE,
         json={"id_session": "s1", "input": "Summarize this session.", "id_user": "u1"},
     )
@@ -193,56 +206,96 @@ def test_send_message_returns_the_exchange(fake_sdk, patched_user_repository):
     }
 
 
-def test_send_message_injects_the_messenger_from_app_state(fake_sdk, patched_user_repository):
+def test_send_message_injects_both_sdk_factories_from_app_state(patched_user_repository):
     service = StubSessionService(result=make_message())
-    messenger = fake_sdk.AekoMessenger()
-    client = build_client(service, aeko_messenger=messenger)
 
-    client.post(SEND_ROUTE, json={"id_session": "", "input": "hi", "id_user": "u1"})
+    build_client(service).post(SEND_ROUTE, json={"id_session": "", "input": "hi", "id_user": "u1"})
 
     call = service.calls[0]
-    assert call["aeko_messenger"] is messenger
+    assert call["aeko_messenger_factory"] is MESSENGER_FACTORY
+    assert call["aeko_session_factory"] is SESSION_FACTORY
     assert call["id_session"] == ""
     assert call["id_user"] == "u1"
     assert isinstance(call["user_repository"], StubUserRepository)
 
 
-def test_send_message_defaults_missing_body_fields(fake_sdk, patched_user_repository):
+def test_send_message_defaults_missing_body_fields(patched_user_repository):
     service = StubSessionService(result=make_message())
-    client = build_client(service, aeko_messenger=fake_sdk.AekoMessenger())
 
-    client.post(SEND_ROUTE, json={})
+    build_client(service).post(SEND_ROUTE, json={})
 
     assert service.calls[0]["input"] == ""
     assert service.calls[0]["id_user"] == ""
     assert service.calls[0]["id_session"] is None
 
 
-def test_send_message_returns_500_when_messenger_is_not_initialized():
+def test_send_message_returns_500_when_the_sdk_is_not_initialized():
     service = StubSessionService(result=make_message())
-    client = build_client(service, aeko_messenger=None)
 
-    response = client.post(SEND_ROUTE, json={"id_session": "s1", "input": "hi", "id_user": "u1"})
+    response = build_client(service, factories=False).post(
+        SEND_ROUTE, json={"id_session": "s1", "input": "hi", "id_user": "u1"}
+    )
 
     assert response.status_code == 500
-    assert response.json()["detail"] == "Aeko messenger is not initialized"
+    assert response.json()["detail"] == "Aeko SDK is not initialized"
 
 
-def test_send_message_maps_value_error_to_400(fake_sdk, patched_user_repository):
+def test_send_message_maps_value_error_to_400(patched_user_repository):
     service = StubSessionService(error=ValueError("Session limit reached."))
-    client = build_client(service, aeko_messenger=fake_sdk.AekoMessenger())
 
-    response = client.post(SEND_ROUTE, json={"id_session": "s1", "input": "hi", "id_user": "u1"})
+    response = build_client(service).post(
+        SEND_ROUTE, json={"id_session": "s1", "input": "hi", "id_user": "u1"}
+    )
 
     assert response.status_code == 400
     assert response.json()["detail"] == "Session limit reached."
 
 
-def test_send_message_maps_unexpected_error_to_500(fake_sdk, patched_user_repository):
-    service = StubSessionService(error=RuntimeError("boom"))
-    client = build_client(service, aeko_messenger=fake_sdk.AekoMessenger())
+def test_send_message_maps_a_rejected_answer_to_502(patched_user_repository):
+    """An empty answer is a successful run with nothing to persist, not a crash."""
+    service = StubSessionService(
+        error=GuardrailRejectedError("The output guardrail rejected every draft.")
+    )
 
-    response = client.post(SEND_ROUTE, json={"id_session": "s1", "input": "hi", "id_user": "u1"})
+    response = build_client(service).post(
+        SEND_ROUTE, json={"id_session": "s1", "input": "hi", "id_user": "u1"}
+    )
+
+    assert response.status_code == 502
+    assert response.json()["detail"] == "The output guardrail rejected every draft."
+
+
+def test_send_message_maps_unexpected_error_to_500(patched_user_repository):
+    service = StubSessionService(error=RuntimeError("boom"))
+
+    response = build_client(service).post(
+        SEND_ROUTE, json={"id_session": "s1", "input": "hi", "id_user": "u1"}
+    )
 
     assert response.status_code == 500
     assert "boom" in response.json()["detail"]
+
+
+def test_send_message_runs_the_blocking_sdk_call_off_the_event_loop(patched_user_repository):
+    """A run is several model calls long: it may never block the event loop."""
+
+    class LoopAwareService(StubSessionService):
+        def __init__(self):
+            super().__init__(result=make_message())
+            self.ran_on_the_event_loop = None
+
+        def send_message(self, *args, **kwargs):
+            try:
+                asyncio.get_running_loop()
+                self.ran_on_the_event_loop = True
+            except RuntimeError:
+                self.ran_on_the_event_loop = False
+            return super().send_message(*args, **kwargs)
+
+    service = LoopAwareService()
+    response = build_client(service).post(
+        SEND_ROUTE, json={"id_session": "s1", "input": "hi", "id_user": "u1"}
+    )
+
+    assert response.status_code == 200
+    assert service.ran_on_the_event_loop is False

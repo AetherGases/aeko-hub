@@ -30,8 +30,16 @@ sys.modules.setdefault("aeko", fake_aeko)
 
 os.environ["MONGO_URI"] = "mongodb://fake-host:27017"
 os.environ["DB_NAME"] = "aeko_test"
-os.environ["AEKO_MODEL_LIST"] = "model-a,model-b"
-os.environ["AEKO_API_KEY_LIST"] = "key-a,key-b"
+os.environ["GEMINI_API_KEY"] = "test-gemini-key"
+os.environ["AEKO_FAST_MODEL"] = "fast-model"
+os.environ["AEKO_SLOW_MODEL"] = "slow-model"
+os.environ["AEKO_MAX_TOKENS"] = "512"
+os.environ["AEKO_REPORT_MAX_TOKENS"] = "4096"
+
+# The 1.x variables are gone; clearing them keeps a developer's local `.env`
+# from making a stale name look supported.
+os.environ.pop("AEKO_MODEL_LIST", None)
+os.environ.pop("AEKO_API_KEY_LIST", None)
 
 
 # --------------------------------------------------------------------------
@@ -91,9 +99,29 @@ class FakeMongoClient:
         self.closed = True
 
 
+@pytest.fixture(autouse=True)
+def reset_aeko_runtime():
+    """`Aeko.config()` and `set_tools()` are process-wide; no test may inherit them."""
+    fake_aeko.Aeko.reset()
+    yield
+    fake_aeko.Aeko.reset()
+
+
 @pytest.fixture
 def fake_sdk():
     """The module registered as `aeko` for the whole suite."""
+    return fake_aeko
+
+
+@pytest.fixture
+def configured_sdk(reset_aeko_runtime):
+    """The SDK as a started application leaves it: an API key supplied.
+
+    Tests that mount a router without running the real lifespan need this;
+    without it the SDK refuses every run, which is what `AekoNotConfiguredError`
+    is for.
+    """
+    fake_aeko.Aeko.config("test-gemini-key")
     return fake_aeko
 
 

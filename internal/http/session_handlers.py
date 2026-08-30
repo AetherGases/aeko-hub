@@ -1,11 +1,12 @@
 from datetime import datetime
 
 from fastapi import APIRouter, Depends, HTTPException, Path, Request
+from fastapi.concurrency import run_in_threadpool
 from pydantic import BaseModel, Field
 
 from session.database.repository import Repository
 from session.service import Service
-from session.session import IService
+from session.session import GuardrailRejectedError, IService
 
 from user.database.repository import Repository as UserRepository
 
@@ -129,7 +130,8 @@ def get_session_messages(
             },
         },
         400: {"description": "The request body is missing required fields or is invalid."},
-        500: {"description": "Aeko messenger is not initialized or an unexpected error occurred."},
+        502: {"description": "The output guardrail rejected every draft, so the run produced no answer."},
+        500: {"description": "The Aeko SDK is not initialized or an unexpected error occurred."},
     },
     openapi_extra={
         "requestBody": {
@@ -176,13 +178,27 @@ async def send_message(
     id_session = body.get("id_session")
     input = body.get("input", "")
     id_user = body.get("id_user", "")
-    aeko_messenger = request.app.state._state.get("aeko_messenger")
 
-    if not aeko_messenger:
-        raise HTTPException(status_code=500, detail="Aeko messenger is not initialized")
+    # The SDK objects are built per request: the messenger belongs to the user
+    # asking, and the session document travels with the call.
+    aeko_messenger_factory = request.app.state._state.get("aeko_messenger_factory")
+    aeko_session_factory = request.app.state._state.get("aeko_session_factory")
+
+    if not aeko_messenger_factory or not aeko_session_factory:
+        raise HTTPException(status_code=500, detail="Aeko SDK is not initialized")
 
     try:
-        message = service.send_message(id_session, input, id_user, aeko_messenger, UserRepository(request.app.state.db))
+        # A run is several model calls long, and more when the guardrail sends a
+        # draft back, so it never runs on the event loop.
+        message = await run_in_threadpool(
+            service.send_message,
+            id_session,
+            input,
+            id_user,
+            aeko_messenger_factory,
+            aeko_session_factory,
+            UserRepository(request.app.state.db),
+        )
         return MessageResponseData(
             input_message=message.input,
             output_message=message.output,
@@ -190,5 +206,7 @@ async def send_message(
         )
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except GuardrailRejectedError as exc:
+        raise HTTPException(status_code=502, detail=str(exc)) from exc
     except Exception as exc:
         raise HTTPException(status_code=500, detail=f"Error sending message: {exc}") from exc

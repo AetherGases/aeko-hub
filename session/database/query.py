@@ -35,8 +35,11 @@ def get_session_messages_query(id_session: str) -> tuple[dict, dict]:
         "messages.submitted_at": 1,
     }
 
-def get_save_message_query(input: str, output: str, llm: str, input_tokens: int, output_tokens: int) -> dict:
-    now = datetime.utcnow()
+def get_save_message_query(input: str, output: str, llm: str, input_tokens: int, output_tokens: int, submitted_at: datetime | None = None) -> dict:
+    # The turn is created by the SDK, which is the only thing that knows when it
+    # was answered, so its own `submitted_at` is what gets stored — and what the
+    # session's `updated_at` is bumped to.
+    now = submitted_at or datetime.utcnow()
 
     query = {
         "$push": {

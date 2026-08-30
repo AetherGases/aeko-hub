@@ -77,7 +77,8 @@ class Repository(IRepository):
                 output=message.output,
                 llm=message.llm,
                 input_tokens=message.input_tokens,
-                output_tokens=message.output_tokens
+                output_tokens=message.output_tokens,
+                submitted_at=message.submitted_at
             )
             self.db["session"].update_one(q.get_session_filter(id_session), query)
         except Exception as e:

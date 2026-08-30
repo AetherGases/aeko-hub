@@ -171,7 +171,7 @@ paths:
       tags:
         - Sessions
       summary: Send a message to the AI session
-      description: Creates or continues a session message exchange using the current Aeko messenger instance.
+      description: Creates or continues a session message exchange, running the Aeko messenger for the asking user.
       operationId: sendSessionMessage
       requestBody:
         required: true
@@ -202,14 +202,22 @@ paths:
                 $ref: '#/components/schemas/ErrorResponse'
               example:
                 detail: User is not allowed to access this session.
-        '500':
-          description: Aeko messenger is not initialized or an unexpected error occurred.
+        '502':
+          description: The output guardrail rejected every draft, so the run produced no answer.
           content:
             application/json:
               schema:
                 $ref: '#/components/schemas/ErrorResponse'
               example:
-                detail: Aeko messenger is not initialized
+                detail: The output guardrail rejected every draft. Please rephrase.
+        '500':
+          description: The Aeko SDK is not initialized or an unexpected error occurred.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+              example:
+                detail: Aeko SDK is not initialized
   /aether-api/v1/ai/report:
     post:
       tags:
