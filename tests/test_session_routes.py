@@ -17,8 +17,8 @@ from internal.http import session_handlers
 from session.entity import Message, Session
 from session.session import GuardrailRejectedError
 
-SESSIONS_ROUTE = "/v1/ai/sessions/user/{id_user}"
-MESSAGES_ROUTE = "/v1/ai/session/{id_session}/messages"
+SESSIONS_ROUTE = "/aether-api/v1/ai/sessions/user/{id_user}"
+MESSAGES_ROUTE = "/aether-api/v1/ai/session/{id_session}/messages"
 SEND_ROUTE = "/aether-api/v1/ai/user/session/message"
 
 SUBMITTED_AT = datetime(2026, 7, 26, 14, 30, 0)
@@ -97,7 +97,7 @@ def make_message(input="Summarize this session.", output="Here is the summary.")
 
 
 # ---------------------------------------------------------------------------
-# GET /v1/ai/sessions/user/{id_user}
+# GET /aether-api/v1/ai/sessions/user/{id_user}
 # ---------------------------------------------------------------------------
 def test_get_user_sessions_returns_sessions():
     service = StubSessionService(
@@ -147,7 +147,7 @@ def test_get_user_sessions_returns_503_when_database_is_not_initialized():
 
 
 # ---------------------------------------------------------------------------
-# GET /v1/ai/session/{id_session}/messages
+# GET /aether-api/v1/ai/session/{id_session}/messages
 # ---------------------------------------------------------------------------
 def test_get_session_messages_returns_messages():
     service = StubSessionService(result=[make_message()])

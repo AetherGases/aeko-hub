@@ -233,16 +233,16 @@ def test_only_the_entry_point_imports_the_sdk():
 def test_journey_user_then_sessions_then_messages(live_app):
     client, _, _, _ = live_app
 
-    user = client.get("/v1/ai/user/12345")
+    user = client.get("/aether-api/v1/ai/user/12345")
     assert user.status_code == 200
     assert user.json()["role"] == "analyst"
 
-    sessions = client.get("/v1/ai/sessions/user/u1")
+    sessions = client.get("/aether-api/v1/ai/sessions/user/u1")
     assert sessions.status_code == 200
     assert sessions.json() == [{"id": "s1", "name": "Weekly emissions review"}]
 
     id_session = sessions.json()[0]["id"]
-    messages = client.get(f"/v1/ai/session/{id_session}/messages")
+    messages = client.get(f"/aether-api/v1/ai/session/{id_session}/messages")
     assert messages.status_code == 200
     assert messages.json() == [
         {
@@ -256,8 +256,8 @@ def test_journey_user_then_sessions_then_messages(live_app):
 def test_journey_unknown_user_is_404(live_app):
     client, _, _, _ = live_app
 
-    assert client.get("/v1/ai/user/99999").status_code == 404
-    assert client.get("/v1/ai/sessions/user/ghost").status_code == 404
+    assert client.get("/aether-api/v1/ai/user/99999").status_code == 404
+    assert client.get("/aether-api/v1/ai/sessions/user/ghost").status_code == 404
 
 
 # ---------------------------------------------------------------------------

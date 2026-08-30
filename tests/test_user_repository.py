@@ -1,7 +1,7 @@
 """Unit tests for the concrete user repository and its query helpers.
 
 `user.database.repository.Repository` is the object both
-`GET /v1/ai/user/{id_external_user}` and
+`GET /aether-api/v1/ai/user/{id_external_user}` and
 `POST /aether-api/v1/ai/user/session/message` build at request time, so the
 contract it must honour is `user.user.IRepository`.
 """
@@ -65,7 +65,7 @@ def test_repository_exposes_every_method_of_the_interface(method):
 
 
 # ---------------------------------------------------------------------------
-# get_user - used by GET /v1/ai/user/{id_external_user}
+# get_user - used by GET /aether-api/v1/ai/user/{id_external_user}
 # ---------------------------------------------------------------------------
 def test_get_user_returns_the_user_entity():
     repository, _ = build_repository(user=StubCollection(find_one_result=USER_DOCUMENT))

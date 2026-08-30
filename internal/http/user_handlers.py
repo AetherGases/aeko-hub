@@ -24,7 +24,7 @@ def get_user_service(request: Request) -> IService:
 
 
 @router.get(
-    "/v1/ai/user/{id_external_user}",
+    "/aether-api/v1/ai/user/{id_external_user}",
     response_model=UserResponseData,
     summary="Get user by external identifier",
     description="Retrieves a user profile using the external user identifier stored in the core database.",
