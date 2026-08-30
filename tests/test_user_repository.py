@@ -9,6 +9,7 @@ contract it must honour is `user.user.IRepository`.
 from datetime import datetime, timedelta
 
 import pytest
+from bson import ObjectId
 
 from tests.mongo_doubles import StubCollection, StubDatabase
 from user.database import query as q
@@ -16,8 +17,10 @@ from user.database.repository import Repository
 from user.entity import User, UserMemory
 from user.user import IRepository
 
+ID_USER = "65a8b3d6c0f8e1d7f4b2c010"
+
 USER_DOCUMENT = {
-    "_id": "65a8b3d6c0f8e1d7f4b2c010",
+    "_id": ID_USER,
     "id_external_user": 12345,
     "role": "analyst",
     "usecase": "report_generation",
@@ -126,9 +129,11 @@ def test_get_user_by_id_queries_by_the_internal_identifier():
     collection = StubCollection(find_one_result=USER_DOCUMENT)
     repository, _ = build_repository(user=collection)
 
-    repository.get_user_by_id("65a8b3d6c0f8e1d7f4b2c010")
+    repository.get_user_by_id(ID_USER)
 
-    assert collection.call_args("find_one")[0][0] == {"_id": "65a8b3d6c0f8e1d7f4b2c010"}
+    query = collection.call_args("find_one")[0][0]
+    assert {"_id": ID_USER} in query["$or"]
+    assert {"_id": ObjectId(ID_USER)} in query["$or"]
 
 
 def test_get_user_by_id_returns_none_when_not_found():
@@ -156,6 +161,15 @@ def test_get_user_memories_maps_every_document():
     assert isinstance(memories[0], UserMemory)
     assert memories[0].field == "improvement_plan"
     assert memories[0].created_at == MEMORY_DOCUMENT["created_at"]
+
+
+def test_get_user_memories_renders_an_object_id_owner_as_text():
+    document = {**MEMORY_DOCUMENT, "_id": ObjectId(MEMORY_DOCUMENT["_id"]), "id_user": ObjectId(ID_USER)}
+    repository, _ = build_repository(user_memory=StubCollection(find_result=[document]))
+
+    memories = repository.get_user_memories(ID_USER)
+
+    assert memories[0].id_user == ID_USER
 
 
 def test_get_user_memories_returns_an_empty_list():
@@ -200,12 +214,42 @@ def test_get_user_query_filter_targets_the_external_identifier():
     assert q.get_user_query_filter(12345) == {"id_external_user": 12345}
 
 
+def test_get_user_query_filter_keeps_the_external_identifier_a_number():
+    """`id_external_user` references Postgres, never a Mongo `_id`."""
+    assert isinstance(q.get_user_query_filter(12345)["id_external_user"], int)
+
+
 def test_get_user_query_targets_the_internal_identifier():
-    assert q.get_user_query("u1") == ({"_id": "u1"}, {})
+    query, projection = q.get_user_query(ID_USER)
+
+    assert {"_id": ID_USER} in query["$or"]
+    assert {"_id": ObjectId(ID_USER)} in query["$or"]
+    assert projection == {}
+
+
+def test_get_user_query_keeps_an_identifier_that_is_not_an_object_id():
+    query, _ = q.get_user_query("u1")
+
+    assert query["$or"] == [{"_id": "u1"}, {"_id": "u1"}]
 
 
 def test_get_user_memories_query_targets_the_user():
-    assert q.get_user_memories_query("u1") == {"id_user": "u1"}
+    query = q.get_user_memories_query(ID_USER)
+
+    assert {"id_user": ID_USER} in query["$or"]
+    assert {"id_user": ObjectId(ID_USER)} in query["$or"]
+
+
+def test_create_user_memory_query_stores_the_owner_as_an_object_id():
+    document = q.create_user_memory_query(UserMemory(id=None, id_user=ID_USER, field="f", description="d"))
+
+    assert document["id_user"] == ObjectId(ID_USER)
+
+
+def test_create_user_memory_query_keeps_an_owner_that_is_not_an_object_id():
+    document = q.create_user_memory_query(UserMemory(id=None, id_user="u1", field="f", description="d"))
+
+    assert document["id_user"] == "u1"
 
 
 def test_create_user_memory_query_keeps_explicit_timestamps():

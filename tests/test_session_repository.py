@@ -227,7 +227,7 @@ def test_create_session_stores_the_owner_and_an_empty_history():
     repository.create_session(ID_USER, StubUserRepository(user=object()))
 
     document = collection.call_args("insert_one")[0][0]
-    assert document["id_user"] == ID_USER
+    assert document["id_user"] == ObjectId(ID_USER)
     assert document["messages"] == []
 
 
@@ -267,6 +267,7 @@ def test_save_message_pushes_the_message_into_the_session():
     assert update["$push"]["messages"]["input"] == "What is scope 3?"
     assert update["$push"]["messages"]["output"] == "Indirect emissions."
     assert update["$push"]["messages"]["llm"] == "fake-llm"
+    assert "ouput" not in update["$push"]["messages"]
 
 
 def test_save_message_wraps_database_failures_in_runtime_error():
@@ -305,13 +306,25 @@ def test_message_from_data_reads_the_stored_field_names():
     assert (message.input_tokens, message.output_tokens) == (0, 0)
 
 
-def test_message_from_data_reads_the_response_field_names():
-    message = message_from_data(
-        {"input_message": "in", "output_message": "out", "submitted_at": SUBMITTED_AT, "llm": "m", "input_tokens": 1, "output_tokens": 2}
-    )
+def test_message_from_data_reads_the_optional_llm_and_token_fields():
+    message = message_from_data({**MESSAGE_DOCUMENT, "llm": "m", "input_tokens": 1, "output_tokens": 2})
 
-    assert (message.input, message.output, message.llm) == ("in", "out", "m")
-    assert (message.input_tokens, message.output_tokens) == (1, 2)
+    assert (message.llm, message.input_tokens, message.output_tokens) == ("m", 1, 2)
+
+
+def test_message_from_data_ignores_the_response_field_names():
+    """`input_message`/`output_message` belong to the HTTP response model.
+
+    Mongo never stores them, so the mapper reads the collection field names
+    only and a document without them is a programming error, not a default.
+    """
+    with pytest.raises(KeyError):
+        message_from_data({"input_message": "in", "output_message": "out", "submitted_at": SUBMITTED_AT})
+
+
+def test_message_from_data_ignores_the_legacy_misspelled_output():
+    with pytest.raises(KeyError):
+        message_from_data({"input": "in", "ouput": "out", "submitted_at": SUBMITTED_AT})
 
 
 def test_session_from_data_maps_the_document():
@@ -319,6 +332,24 @@ def test_session_from_data_maps_the_document():
 
     assert (session.id, session.id_user, session.name) == (ID_SESSION, ID_USER, "Weekly emissions review")
     assert session.messages == []
+
+
+def test_session_from_data_maps_embedded_messages_into_entities():
+    """`Session.messages` is typed `list[Message]`, so the mapper has to
+    convert the embedded documents instead of forwarding the raw dicts."""
+    session = session_from_data({**SESSION_DOCUMENT, "messages": [MESSAGE_DOCUMENT]})
+
+    assert len(session.messages) == 1
+    assert isinstance(session.messages[0], Message)
+    assert session.messages[0].input == "Summarize this session."
+    assert session.messages[0].output == "Here is the summary."
+    assert session.messages[0].submitted_at == SUBMITTED_AT
+
+
+def test_session_from_data_renders_an_object_id_owner_as_text():
+    session = session_from_data({**SESSION_DOCUMENT, "_id": ObjectId(ID_SESSION), "id_user": ObjectId(ID_USER)})
+
+    assert (session.id, session.id_user) == (ID_SESSION, ID_USER)
 
 
 # ---------------------------------------------------------------------------
@@ -366,6 +397,7 @@ def test_get_session_messages_query_projects_the_message_fields():
     assert projection["messages.input"] == 1
     assert projection["messages.output"] == 1
     assert projection["messages.submitted_at"] == 1
+    assert "messages.ouput" not in projection
 
 
 def test_get_session_messages_count_query_projects_the_size():
@@ -379,17 +411,23 @@ def test_get_save_message_query_pushes_and_timestamps():
     update = q.get_save_message_query("in", "out", "llm", 1, 2)
 
     assert update["$push"]["messages"]["input"] == "in"
+    assert update["$push"]["messages"]["output"] == "out"
     assert update["$push"]["messages"]["output_tokens"] == 2
+    assert "ouput" not in update["$push"]["messages"]
     assert update["$set"]["updated_at"] == update["$push"]["messages"]["submitted_at"]
 
 
 def test_get_create_session_query_starts_an_empty_named_session():
     document = q.get_create_session_query(ID_USER)
 
-    assert document["id_user"] == ID_USER
+    assert document["id_user"] == ObjectId(ID_USER)
     assert document["messages"] == []
     assert document["name"] == ""
     assert document["created_at"] == document["updated_at"]
+
+
+def test_get_create_session_query_keeps_an_owner_that_is_not_an_object_id():
+    assert q.get_create_session_query("u1")["id_user"] == "u1"
 
 
 def test_get_update_name_query_sets_the_name():

@@ -156,6 +156,21 @@ def test_create_improvement_plan_query_maps_every_field():
     }
 
 
+def test_create_improvement_plan_query_stamps_a_missing_update_timestamp():
+    """Every document in the collection carries `updated_at`; a plan built
+    from the Aeko DTO has none, so the query has to stamp it."""
+    document = q.create_improvement_plan_query(ImprovementPlan(id_external_inventory=1))
+
+    assert isinstance(document["updated_at"], datetime)
+
+
+def test_create_improvement_plan_query_keeps_the_external_inventory_a_number():
+    """`id_external_inventory` references Postgres, never a Mongo `_id`."""
+    document = q.create_improvement_plan_query(ImprovementPlan(id_external_inventory=7))
+
+    assert isinstance(document["id_external_inventory"], int)
+
+
 # ---------------------------------------------------------------------------
 # Service
 # ---------------------------------------------------------------------------

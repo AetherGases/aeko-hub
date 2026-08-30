@@ -1,3 +1,5 @@
+from datetime import datetime
+
 from improvement_plan.entity import ImprovementPlan
 
 
@@ -13,5 +15,5 @@ def create_improvement_plan_query(improvement_plan: ImprovementPlan) -> dict:
 		"defined_problem": improvement_plan.defined_problem,
 		"method": improvement_plan.method,
 		"reasoning": improvement_plan.reasoning,
-		"updated_at": improvement_plan.updated_at,
+		"updated_at": improvement_plan.updated_at or datetime.utcnow(),
 	}
