@@ -267,6 +267,7 @@ def test_save_message_pushes_the_message_into_the_session():
     assert update["$push"]["messages"]["input"] == "What is scope 3?"
     assert update["$push"]["messages"]["output"] == "Indirect emissions."
     assert update["$push"]["messages"]["llm"] == "fake-llm"
+    assert update["$push"]["messages"]["submitted_at"] == SUBMITTED_AT
     assert "ouput" not in update["$push"]["messages"]
 
 
@@ -405,6 +406,14 @@ def test_get_session_messages_count_query_projects_the_size():
 
     assert {"_id": ID_SESSION} in query["$or"]
     assert projection["messages_count"] == {"$size": "$messages"}
+
+
+def test_get_save_message_query_stores_the_turns_own_timestamp():
+    """The SDK stamps the turn; the API stores what it was handed."""
+    update = q.get_save_message_query("in", "out", "llm", 1, 2, SUBMITTED_AT)
+
+    assert update["$push"]["messages"]["submitted_at"] == SUBMITTED_AT
+    assert update["$set"]["updated_at"] == SUBMITTED_AT
 
 
 def test_get_save_message_query_pushes_and_timestamps():

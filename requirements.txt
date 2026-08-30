@@ -1,10 +1,12 @@
 # Runtime
+aeko>=2.0.0,<3.0.0
 fastapi>=0.115.0
 uvicorn[standard]>=0.30.0
 pydantic>=2.13.4
 pymongo>=4.9.0
 python-dotenv>=1.2.3
 boto3>=1.35.0
+openpyxl>=3.1.0
 requests>=2.34.2
 
 # Test

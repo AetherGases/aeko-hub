@@ -38,20 +38,6 @@ SESSION_DOCUMENT = {
 }
 
 
-class StubMessenger:
-    def __init__(self):
-        self.prepared_with = None
-
-    def set_alter_name(self, alter_name):
-        self.alter_name = alter_name
-
-    def prepare(self, id_user, id_session):
-        self.prepared_with = (id_user, id_session)
-
-    def send_message(self, input):
-        return SimpleNamespace(input=input, output=f"echo: {input}", llm="fake-llm", input_tokens=1, output_tokens=2)
-
-
 def request_with(db):
     return SimpleNamespace(app=SimpleNamespace(state=SimpleNamespace(db=db)))
 
@@ -160,11 +146,14 @@ def test_dependencies_reject_an_uninitialized_database(dependency):
 # ---------------------------------------------------------------------------
 # Real stack: handler + service + concrete repository over a stubbed Mongo
 # ---------------------------------------------------------------------------
-def build_client(router, database, aeko_messenger=None):
+def build_client(router, database, api_main=None):
+    """`api_main` supplies the very adapters the real lifespan publishes."""
     app = FastAPI()
     app.include_router(router)
     app.state.db = database
-    app.state._state["aeko_messenger"] = aeko_messenger
+    if api_main is not None:
+        app.state._state["aeko_messenger_factory"] = api_main.build_messenger
+        app.state._state["aeko_session_factory"] = api_main.build_session
     return TestClient(app)
 
 
@@ -206,29 +195,88 @@ def test_get_session_messages_runs_through_the_concrete_repository():
     ]
 
 
-def test_send_message_runs_through_the_concrete_repositories():
-    session_collection = StubCollection(find_one_results=[{"messages_count": 0}, SESSION_DOCUMENT])
-    database = StubDatabase(session=session_collection, user=StubCollection(find_one_result=USER_DOCUMENT))
-    messenger = StubMessenger()
+MESSAGES_DOCUMENT = {
+    "messages": [
+        {
+            "input": "Summarize this session.",
+            "output": "Here is the summary.",
+            "submitted_at": "2026-07-26T14:30:00",
+        }
+    ]
+}
 
-    response = build_client(session_handlers.router, database, aeko_messenger=messenger).post(
+
+def session_reads():
+    """What the session collection answers, in the order the service asks."""
+    return [{"messages_count": 0}, SESSION_DOCUMENT, SESSION_DOCUMENT, MESSAGES_DOCUMENT]
+
+
+def test_send_message_runs_through_the_concrete_repositories(api_main, configured_sdk):
+    session_collection = StubCollection(find_one_results=session_reads())
+    database = StubDatabase(
+        session=session_collection,
+        user=StubCollection(find_one_result=USER_DOCUMENT),
+        user_memory=StubCollection(find_result=[]),
+    )
+
+    response = build_client(session_handlers.router, database, api_main=api_main).post(
         SEND_MESSAGE_ROUTE,
         json={"id_session": ID_SESSION, "input": "What is scope 3?", "id_user": ID_USER},
     )
 
     assert response.status_code == 200
     assert response.json()["output_message"] == "echo: What is scope 3?"
-    assert messenger.prepared_with == (ID_USER, ID_SESSION)
     assert len(session_collection.call_args("update_one")) == 1
 
 
-def test_send_message_returns_400_when_the_user_does_not_own_the_session():
-    session_collection = StubCollection(find_one_results=[{"messages_count": 0}, SESSION_DOCUMENT])
-    database = StubDatabase(session=session_collection, user=StubCollection(find_one_result=USER_DOCUMENT))
+def test_send_message_hands_the_real_dtos_to_the_sdk(api_main, configured_sdk):
+    database = StubDatabase(
+        session=StubCollection(find_one_results=session_reads()),
+        user=StubCollection(find_one_result=USER_DOCUMENT),
+        user_memory=StubCollection(find_result=[]),
+    )
 
-    response = build_client(session_handlers.router, database, aeko_messenger=StubMessenger()).post(
+    build_client(session_handlers.router, database, api_main=api_main).post(
+        SEND_MESSAGE_ROUTE,
+        json={"id_session": ID_SESSION, "input": "What is scope 3?", "id_user": ID_USER},
+    )
+
+    messenger = configured_sdk.AekoMessenger.instances[-1]
+    _, session = messenger.sent[-1]
+    assert isinstance(messenger.user, configured_sdk.AekoUser)
+    assert isinstance(session, configured_sdk.AekoSession)
+    assert session.id == ID_SESSION
+    assert [turn.input for turn in session.messages][0] == "Summarize this session."
+
+
+def test_send_message_returns_400_when_the_user_does_not_own_the_session(api_main, configured_sdk):
+    session_collection = StubCollection(find_one_results=session_reads())
+    database = StubDatabase(
+        session=session_collection,
+        user=StubCollection(find_one_result=USER_DOCUMENT),
+        user_memory=StubCollection(find_result=[]),
+    )
+
+    response = build_client(session_handlers.router, database, api_main=api_main).post(
         SEND_MESSAGE_ROUTE,
         json={"id_session": ID_SESSION, "input": "hi", "id_user": "someone-else"},
     )
 
     assert response.status_code == 400
+
+
+def test_send_message_fails_when_the_sdk_was_never_configured(api_main):
+    """No `Aeko.config()` means no run: a deployment problem, not a user one."""
+    database = StubDatabase(
+        session=StubCollection(find_one_results=session_reads()),
+        user=StubCollection(find_one_result=USER_DOCUMENT),
+        user_memory=StubCollection(find_result=[]),
+    )
+
+    response = build_client(session_handlers.router, database, api_main=api_main).post(
+        SEND_MESSAGE_ROUTE,
+        json={"id_session": ID_SESSION, "input": "hi", "id_user": ID_USER},
+    )
+
+    assert response.status_code == 500
+    assert "not configured" in response.json()["detail"]
