@@ -54,9 +54,9 @@ def test_report_route_is_registered_on_the_application(api_main):
 @pytest.mark.parametrize(
     "path",
     [
-        "/v1/ai/user/{id_external_user}",
-        "/v1/ai/sessions/user/{id_user}",
-        "/v1/ai/session/{id_session}/messages",
+        "/aether-api/v1/ai/user/{id_external_user}",
+        "/aether-api/v1/ai/sessions/user/{id_user}",
+        "/aether-api/v1/ai/session/{id_session}/messages",
         SEND_MESSAGE_ROUTE,
         REPORT_ROUTE,
     ],
@@ -160,7 +160,7 @@ def build_client(router, database, api_main=None):
 def test_get_user_runs_through_the_concrete_repository():
     database = StubDatabase(user=StubCollection(find_one_result=USER_DOCUMENT))
 
-    response = build_client(user_handlers.router, database).get("/v1/ai/user/12345")
+    response = build_client(user_handlers.router, database).get("/aether-api/v1/ai/user/12345")
 
     assert response.status_code == 200
     assert response.json() == {"id_external_user": 12345, "role": "analyst", "usecase": "report_generation"}
@@ -169,7 +169,7 @@ def test_get_user_runs_through_the_concrete_repository():
 def test_get_user_returns_404_when_the_document_does_not_exist():
     database = StubDatabase(user=StubCollection(find_one_result=None))
 
-    response = build_client(user_handlers.router, database).get("/v1/ai/user/12345")
+    response = build_client(user_handlers.router, database).get("/aether-api/v1/ai/user/12345")
 
     assert response.status_code == 404
 
@@ -177,7 +177,7 @@ def test_get_user_returns_404_when_the_document_does_not_exist():
 def test_get_user_sessions_runs_through_the_concrete_repository():
     database = StubDatabase(session=StubCollection(find_result=[SESSION_DOCUMENT]))
 
-    response = build_client(session_handlers.router, database).get(f"/v1/ai/sessions/user/{ID_USER}")
+    response = build_client(session_handlers.router, database).get(f"/aether-api/v1/ai/sessions/user/{ID_USER}")
 
     assert response.status_code == 200
     assert response.json() == [{"id": ID_SESSION, "name": "Weekly emissions review"}]
@@ -187,7 +187,7 @@ def test_get_session_messages_runs_through_the_concrete_repository():
     document = {"messages": [{"input": "hi", "output": "ho", "submitted_at": "2026-07-26T14:30:00"}]}
     database = StubDatabase(session=StubCollection(find_one_result=document))
 
-    response = build_client(session_handlers.router, database).get(f"/v1/ai/session/{ID_SESSION}/messages")
+    response = build_client(session_handlers.router, database).get(f"/aether-api/v1/ai/session/{ID_SESSION}/messages")
 
     assert response.status_code == 200
     assert response.json() == [

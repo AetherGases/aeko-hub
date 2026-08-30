@@ -32,7 +32,7 @@ def get_session_service(request: Request) -> IService:
 
 
 @router.get(
-    "/v1/ai/sessions/user/{id_user}",
+    "/aether-api/v1/ai/sessions/user/{id_user}",
     response_model=list[SessionResponseData],
     summary="List sessions for a user",
     description="Returns all sessions associated with the internal user identifier.",
@@ -68,7 +68,7 @@ def get_user_sessions(
         raise HTTPException(status_code=500, detail=f"Error retrieving user sessions: {exc}") from exc
 
 @router.get(
-    "/v1/ai/session/{id_session}/messages",
+    "/aether-api/v1/ai/session/{id_session}/messages",
     response_model=list[MessageResponseData],
     summary="List messages for a session",
     description="Returns the message history stored for a specific session.",

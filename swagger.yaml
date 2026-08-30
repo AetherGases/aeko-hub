@@ -13,7 +13,7 @@ tags:
   - name: Reports
     description: Endpoints for generating AI-assisted improvement plan reports and persisting output artifacts.
 paths:
-  /v1/ai/user/{id_external_user}:
+  /aether-api/v1/ai/user/{id_external_user}:
     get:
       tags:
         - Users
@@ -63,7 +63,7 @@ paths:
                 $ref: '#/components/schemas/ErrorResponse'
               example:
                 detail: 'Error retrieving user: Error fetching user from database: ...'
-  /v1/ai/sessions/user/{id_user}:
+  /aether-api/v1/ai/sessions/user/{id_user}:
     get:
       tags:
         - Sessions
@@ -114,7 +114,7 @@ paths:
                 $ref: '#/components/schemas/ErrorResponse'
               example:
                 detail: 'Error retrieving user sessions: ...'
-  /v1/ai/session/{id_session}/messages:
+  /aether-api/v1/ai/session/{id_session}/messages:
     get:
       tags:
         - Sessions
