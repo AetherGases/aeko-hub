@@ -1,6 +1,6 @@
 from datetime import datetime
 
-from bson import ObjectId
+from internal.database.object_id import id_filter, normalize_id
 
 SESSION_PROJECTION = {
     "_id": 1,
@@ -10,34 +10,14 @@ SESSION_PROJECTION = {
     "updated_at": 1,
 }
 
-def _normalize(identifier):
-    if isinstance(identifier, str):
-        try:
-            return ObjectId(identifier)
-        except Exception:
-            return identifier
-    return identifier
-
 def get_session_filter(id_session: str) -> dict:
-    return {
-        "$or": [
-            {"_id": id_session},
-            {"_id": _normalize(id_session)},
-        ]
-    }
+    return id_filter("_id", id_session)
 
 def get_session_query(id_session: str) -> tuple[dict, dict]:
     return get_session_filter(id_session), SESSION_PROJECTION
 
 def get_user_sessions_query(id_user: str) -> tuple[dict, dict]:
-    query = {
-        "$or": [
-            {"id_user": id_user},
-            {"id_user": _normalize(id_user)},
-        ]
-    }
-
-    return query, SESSION_PROJECTION
+    return id_filter("id_user", id_user), SESSION_PROJECTION
 
 def get_session_messages_count_query(id_session: str) -> tuple[dict, dict]:
     return get_session_filter(id_session), {
@@ -90,7 +70,7 @@ def get_create_session_query(id_user: str) -> dict:
     now = datetime.utcnow()
 
     query = {
-        "id_user": id_user,
+        "id_user": normalize_id(id_user),
         "name": "",
         "messages": [],
         "created_at": now,

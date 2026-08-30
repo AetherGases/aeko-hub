@@ -91,8 +91,8 @@ class Repository(IRepository):
 
 def message_from_data(data: dict) -> Message:
     return Message(
-        input=data.get("input_message", data.get("input", "")),
-        output=data.get("output_message", data.get("output", data.get("ouput", ""))),
+        input=data["input"],
+        output=data["output"],
         submitted_at=data["submitted_at"],
         llm=data.get("llm", ""),
         input_tokens=data.get("input_tokens", 0),
@@ -105,7 +105,7 @@ def session_from_data(data: dict) -> Session:
         id=str(data["_id"]),
         id_user=str(data["id_user"]),
         name=data["name"],
-        messages=data.get("messages", []),
+        messages=[message_from_data(message) for message in data.get("messages", [])],
         created_at=data.get("created_at"),
         updated_at=data.get("updated_at")
     )

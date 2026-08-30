@@ -22,7 +22,7 @@ class Session:
     id: str
     id_user: str
     name: str
-    messages: list
+    messages: list[Message]
     created_at: datetime | None
     updated_at: datetime | None
 

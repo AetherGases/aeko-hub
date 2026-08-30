@@ -33,7 +33,7 @@ class Repository(IRepository):
             return [
                 UserMemory(
                     id=str(memory["_id"]),
-                    id_user=memory["id_user"],
+                    id_user=str(memory["id_user"]),
                     field=memory["field"],
                     description=memory["description"],
                     created_at=memory.get("created_at"),
