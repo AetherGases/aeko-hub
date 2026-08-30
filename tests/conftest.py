@@ -2,7 +2,7 @@
 
 Two things must happen before any application module is imported:
 
-1. `aeko_sdk` is registered in `sys.modules` pointing at `tests.fake_aeko_sdk`.
+1. `aeko` is registered in `sys.modules` pointing at `tests.fake_aeko`.
    The API imports the real SDK only at its entry point (`cmd/api/main.py`),
    so registering the fake here is enough for the whole suite.
 2. The environment variables `cmd/api/main.py` reads at import time are set.
@@ -24,9 +24,9 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
-from tests import fake_aeko_sdk
+from tests import fake_aeko
 
-sys.modules.setdefault("aeko_sdk", fake_aeko_sdk)
+sys.modules.setdefault("aeko", fake_aeko)
 
 os.environ["MONGO_URI"] = "mongodb://fake-host:27017"
 os.environ["DB_NAME"] = "aeko_test"
@@ -93,8 +93,8 @@ class FakeMongoClient:
 
 @pytest.fixture
 def fake_sdk():
-    """The module registered as `aeko_sdk` for the whole suite."""
-    return fake_aeko_sdk
+    """The module registered as `aeko` for the whole suite."""
+    return fake_aeko
 
 
 @pytest.fixture

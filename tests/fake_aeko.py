@@ -1,9 +1,9 @@
-"""In-memory stand-in for the real `aeko_sdk` package.
+"""In-memory stand-in for the real `aeko` package.
 
 The SDK is an external dependency that is not installed in the test
-environment. `conftest.py` registers this module under the name `aeko_sdk`
+environment. `conftest.py` registers this module under the name `aeko`
 in `sys.modules` before any application module is imported, so production
-code keeps its plain `from aeko_sdk import ...` at the entry point.
+code keeps its plain `from aeko import ...` at the entry point.
 
 Every fake records the calls it receives so tests can assert that the API
 wires the SDK correctly (configuration in the lifespan, per-request calls

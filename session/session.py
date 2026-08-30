@@ -9,11 +9,27 @@ class IRepository(ABC):
         pass
 
     @abstractmethod
-    def get_session_messages_count(self, id_session: str) -> list[Message]:
+    def get_session(self, id_session: str) -> Session:
+        pass
+
+    @abstractmethod
+    def get_session_messages(self, id_session: str) -> list[Message]:
+        pass
+
+    @abstractmethod
+    def get_session_messages_count(self, id_session: str) -> int:
+        pass
+
+    @abstractmethod
+    def create_session(self, id_user: str, user_repository) -> str:
         pass
 
     @abstractmethod
     def save_message(self, id_session: str, message: Message) -> None:
+        pass
+
+    @abstractmethod
+    def update_name(self, id_session: str, name: str) -> None:
         pass
 
 class IService(ABC):
@@ -26,7 +42,7 @@ class IService(ABC):
         pass
 
     @abstractmethod
-    def send_message(self, id_session: str, input: str, id_user: str, aeko_messenger) -> Message:
+    def send_message(self, id_session: str, input: str, id_user: str, aeko_messenger, user_repository) -> Message:
         pass
 
     @abstractmethod

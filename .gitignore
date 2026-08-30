@@ -27,3 +27,6 @@ __pycache__/
 
 CLAUDE.md
 AGENT_DOCS/
+.coverage
+htmlcov/
+.pytest_cache/

@@ -20,7 +20,31 @@ class Repository(IRepository):
             raise e
         except Exception as e:
             raise RuntimeError(f"Error fetching user sessions from database: {e}")
-        
+
+    def get_session(self, id_session: str) -> Session:
+        try:
+            query, projection = q.get_session_query(id_session)
+            session_data = self.db["session"].find_one(query, projection)
+            if not session_data:
+                raise ValueError(f"No session found with id_session {id_session}.")
+            return session_from_data(session_data)
+        except ValueError as e:
+            raise e
+        except Exception as e:
+            raise RuntimeError(f"Error fetching session from database: {e}")
+
+    def get_session_messages(self, id_session: str) -> list[Message]:
+        try:
+            query, projection = q.get_session_messages_query(id_session)
+            session_data = self.db["session"].find_one(query, projection)
+            if session_data is None:
+                raise ValueError(f"No session found with id_session {id_session}.")
+            return [message_from_data(data) for data in session_data.get("messages", [])]
+        except ValueError as e:
+            raise e
+        except Exception as e:
+            raise RuntimeError(f"Error fetching session messages from database: {e}")
+
     def get_session_messages_count(self, id_session: str) -> int:
         try:
             query, projection = q.get_session_messages_count_query(id_session)
@@ -37,13 +61,14 @@ class Repository(IRepository):
         try:
             if not user_repository.get_user_by_id(id_user):
                 raise ValueError(f"User with id_user {id_user} does not exist.")
-            
+
             query = q.get_create_session_query(id_user)
             result = self.db["session"].insert_one(query)
             return str(result.inserted_id)
+        except ValueError as e:
+            raise e
         except Exception as e:
             raise RuntimeError(f"Error creating session in database: {e}")
-
 
     def save_message(self, id_session: str, message: Message) -> None:
         try:
@@ -54,9 +79,15 @@ class Repository(IRepository):
                 input_tokens=message.input_tokens,
                 output_tokens=message.output_tokens
             )
-            self.db["session"].update_one({"_id": id_session}, query)
+            self.db["session"].update_one(q.get_session_filter(id_session), query)
         except Exception as e:
             raise RuntimeError(f"Error saving message to database: {e}")
+
+    def update_name(self, id_session: str, name: str) -> None:
+        try:
+            self.db["session"].update_one(q.get_session_filter(id_session), q.get_update_name_query(name))
+        except Exception as e:
+            raise RuntimeError(f"Error updating session name in database: {e}")
 
 def message_from_data(data: dict) -> Message:
     return Message(
