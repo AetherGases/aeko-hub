@@ -71,7 +71,7 @@ def test_configure_mcp_client_wires_tavily_over_stdio_with_the_given_key(monkeyp
     config = RecordingMultiServerMCPClient.instances[-1].config["tavily"]
     assert config["transport"] == "stdio"
     assert config["command"] == "npx"
-    assert config["args"] == ["-y", "tavily-mcp@latest"]
+    assert config["args"] == ["-y", "tavily-mcp@0.2.22"]
     assert config["env"] == {"TAVILY_API_KEY": "secret-key"}
 
 
