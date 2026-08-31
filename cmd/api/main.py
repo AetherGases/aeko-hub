@@ -5,6 +5,7 @@ from dotenv import load_dotenv
 from fastapi import FastAPI
 from pymongo import MongoClient
 
+from cmd.api.mcp.tavily_mcp import get_tavily_search_tools, get_tavily_site_map_tool
 from internal.http.improvement_plan_handlers import router as improvement_plan_router
 from internal.http.session_handlers import router as session_router
 from internal.http.user_handlers import router as user_router
@@ -18,6 +19,7 @@ from aeko import (
     AekoMessage,
     AekoMessenger,
     AekoSession,
+    AekoTool,
     AekoUser,
     AekoUserMemory,
 )
@@ -36,16 +38,23 @@ AEKO_SLOW_MODEL = os.getenv("AEKO_SLOW_MODEL")
 AEKO_MAX_TOKENS = os.getenv("AEKO_MAX_TOKENS")
 AEKO_REPORT_MAX_TOKENS = os.getenv("AEKO_REPORT_MAX_TOKENS")
 
+# Tools coming from MCP servers, wrapped as `AekoTool` here — the one place
+# that imports `aeko` — so agent modules only ever hand back plain LangChain
+# tools (see `cmd/api/mcp/tavily_mcp.py`).
+TAVILY_SITE_MAP_TOOLS = [AekoTool(tool=tool) for tool in get_tavily_site_map_tool()]
+TAVILY_RESEARCH_TOOLS = [AekoTool(tool=tool) for tool in get_tavily_search_tools()]
+
 # Tools must follow the defined interfaces in Aeko SDK. The keys are the
 # agents' own names, which is what the graph routes by — pass them exactly as
 # the SDK spells them, accents included. `set_tools()` replaces the whole
 # registry, so every agent's tools travel in the single call below.
 AEKO_TOOLS = {
-    "FAQ": [],  # Fill up later....
+    # FAQ only maps the Aether website — it never gets a free-form search tool.
+    "FAQ": list(TAVILY_SITE_MAP_TOOLS) + list(TAVILY_RESEARCH_TOOLS),
     "Análista de inventários": [],  # Fill up later....
-    "Analista de Poluentes": [],  # Fill up later....
-    "Analista de Gases Verdes": [],  # Fill up later....
-    "Coordenador de Melhoria Contínua": [],  # Fill up later....
+    "Analista de Poluentes": list(TAVILY_RESEARCH_TOOLS),
+    "Analista de Gases Verdes": list(TAVILY_RESEARCH_TOOLS),
+    "Coordenador de Melhoria Contínua": list(TAVILY_RESEARCH_TOOLS),
 }
 
 mongo_client = None
