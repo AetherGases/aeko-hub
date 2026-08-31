@@ -181,19 +181,25 @@ TAVILY_RESEARCH_AGENTS = {
 }
 
 
-def test_faq_only_gets_the_site_map_tool(live_app, fake_sdk):
+def test_faq_gets_the_site_map_and_user_memory_tools(live_app, fake_sdk):
     tool_names = {tool.name for tool in fake_sdk.RUNTIME.tools["FAQ"]}
-    assert tool_names == {"tavily_map"}
+    assert tool_names == {"tavily_map", "tavily_search", "tavily_research", "find_user_memory"}
 
 
 @pytest.mark.parametrize("agent", sorted(TAVILY_RESEARCH_AGENTS))
-def test_research_agents_get_search_and_research_tools(live_app, fake_sdk, agent):
+def test_research_agents_get_search_research_and_mongo_tools(live_app, fake_sdk, agent):
     tool_names = {tool.name for tool in fake_sdk.RUNTIME.tools[agent]}
-    assert tool_names == {"tavily_search", "tavily_research"}
+    assert tool_names == {
+        "tavily_search",
+        "tavily_research",
+        "find_improvement_plan",
+        "find_user_memory",
+    }
 
 
-def test_inventory_analyst_gets_no_tavily_tools(live_app, fake_sdk):
-    assert fake_sdk.RUNTIME.tools["Análista de inventários"] == []
+def test_inventory_analyst_gets_no_tavily_tools_but_gets_mongo_tools(live_app, fake_sdk):
+    tool_names = {tool.name for tool in fake_sdk.RUNTIME.tools["Análista de inventários"]}
+    assert tool_names == {"find_improvement_plan", "find_user_memory"}
 
 
 def test_lifespan_publishes_sdk_factories_on_app_state(live_app, fake_sdk):
