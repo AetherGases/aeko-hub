@@ -157,7 +157,7 @@ async def lifespan(app: FastAPI):
         db.command("ping")
     except Exception as exc:
         print(f"MongoDB error: {type(exc).__name__}: {exc}")
-        raise
+        raise RuntimeError(f"Failed to connect to MongoDB: {exc}") from exc
     yield
     mongo_client.close()
 
