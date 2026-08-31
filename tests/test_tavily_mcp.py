@@ -85,6 +85,14 @@ def test_configure_mcp_client_falls_back_to_the_tavily_api_key_env_var(monkeypat
     assert config["env"]["TAVILY_API_KEY"] == "from-env"
 
 
+def test_configure_mcp_client_raises_when_no_tavily_api_key_is_available(monkeypatch):
+    monkeypatch.setattr(tavily_mcp, "MultiServerMCPClient", RecordingMultiServerMCPClient)
+    monkeypatch.delenv("TAVILY_API_KEY", raising=False)
+
+    with pytest.raises(RuntimeError, match="TAVILY_API_KEY"):
+        tavily_mcp._configure_mcp_client("")
+
+
 # ---------------------------------------------------------------------------
 # _tavily_search / _tavily_research — real MCP tool names use underscores,
 # not the hyphenated spelling the project's own docs use.
