@@ -10,6 +10,14 @@ openpyxl>=3.1.0
 requests>=2.34.2
 langchain-mcp-adapters>=0.3.0,<0.4.0
 
+# The `gases-info` vector search. The published `chroma-mcp` server is not used
+# (it cannot reach Chroma Cloud and cannot embed with our model - see
+# cmd/api/mcp/chroma_mcp_server.py), so the server is ours and these are its
+# direct dependencies. `sentence-transformers` pulls torch.
+mcp>=1.6.0
+chromadb>=1.5.0,<2.0.0
+sentence-transformers>=5.0.0,<7.0.0
+
 # Test
 pytest>=8.4.2
 httpx>=0.28.1

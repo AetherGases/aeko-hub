@@ -5,6 +5,7 @@ from dotenv import load_dotenv
 from fastapi import FastAPI
 from pymongo import MongoClient
 
+from cmd.api.mcp.chroma_mcp import get_gases_info_tools
 from cmd.api.mcp.mongo_mcp import get_improvement_plan_tools, get_user_memory_tools
 from cmd.api.mcp.tavily_mcp import get_tavily_search_tools, get_tavily_site_map_tool
 from internal.http.improvement_plan_handlers import router as improvement_plan_router
@@ -50,6 +51,10 @@ TAVILY_RESEARCH_TOOLS = [AekoTool(tool=tool) for tool in get_tavily_search_tools
 IMPROVEMENT_PLAN_TOOLS = [AekoTool(tool=tool) for tool in get_improvement_plan_tools()]
 USER_MEMORY_TOOLS = [AekoTool(tool=tool) for tool in get_user_memory_tools()]
 
+# ChromaDB MCP: vector search over the `gases-info` collection, pinned in code
+# (see cmd/api/mcp/chroma_mcp.py). Only the green gas analyst gets it.
+GASES_INFO_TOOLS = [AekoTool(tool=tool) for tool in get_gases_info_tools()]
+
 # Tools must follow the defined interfaces in Aeko SDK. The keys are the
 # agents' own names, which is what the graph routes by — pass them exactly as
 # the SDK spells them, accents included. `set_tools()` replaces the whole
@@ -59,7 +64,11 @@ AEKO_TOOLS = {
     "FAQ": list(TAVILY_SITE_MAP_TOOLS) + list(TAVILY_RESEARCH_TOOLS) + list(USER_MEMORY_TOOLS),
     "Análista de inventários": list(IMPROVEMENT_PLAN_TOOLS) + list(USER_MEMORY_TOOLS),
     "Analista de Poluentes": list(TAVILY_RESEARCH_TOOLS) + list(IMPROVEMENT_PLAN_TOOLS) + list(USER_MEMORY_TOOLS),
-    "Analista de Gases Verdes": list(TAVILY_RESEARCH_TOOLS) + list(IMPROVEMENT_PLAN_TOOLS) + list(USER_MEMORY_TOOLS),
+    # The only agent that reads the `gases-info` vector store.
+    "Analista de Gases Verdes": list(TAVILY_RESEARCH_TOOLS)
+    + list(IMPROVEMENT_PLAN_TOOLS)
+    + list(USER_MEMORY_TOOLS)
+    + list(GASES_INFO_TOOLS),
     "Coordenador de Melhoria Contínua": list(TAVILY_RESEARCH_TOOLS)
     + list(IMPROVEMENT_PLAN_TOOLS)
     + list(USER_MEMORY_TOOLS),

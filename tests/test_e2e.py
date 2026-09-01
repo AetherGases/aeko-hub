@@ -174,9 +174,10 @@ def test_lifespan_registers_every_agent_in_a_single_call(live_app, fake_sdk):
 
 
 # Agents that get general web research tools via the Tavily MCP integration.
+# "Analista de Gases Verdes" belongs to this group too, but it alone also gets
+# the ChromaDB vector search, so it has a test of its own below.
 TAVILY_RESEARCH_AGENTS = {
     "Analista de Poluentes",
-    "Analista de Gases Verdes",
     "Coordenador de Melhoria Contínua",
 }
 
@@ -195,6 +196,27 @@ def test_research_agents_get_search_research_and_mongo_tools(live_app, fake_sdk,
         "find_improvement_plan",
         "find_user_memory",
     }
+
+
+def test_green_gas_analyst_also_gets_the_chroma_vector_search(live_app, fake_sdk):
+    """Only this agent reads the `gases-info` collection (see the Feature/40 card)."""
+    tool_names = {tool.name for tool in fake_sdk.RUNTIME.tools["Analista de Gases Verdes"]}
+    assert tool_names == {
+        "tavily_search",
+        "tavily_research",
+        "find_improvement_plan",
+        "find_user_memory",
+        "query_gases_info",
+    }
+
+
+@pytest.mark.parametrize(
+    "agent",
+    sorted(TOOLED_AGENTS - {"Analista de Gases Verdes"}),
+)
+def test_no_other_agent_can_reach_the_gases_info_collection(live_app, fake_sdk, agent):
+    tool_names = {tool.name for tool in fake_sdk.RUNTIME.tools[agent]}
+    assert "query_gases_info" not in tool_names
 
 
 def test_inventory_analyst_gets_no_tavily_tools_but_gets_mongo_tools(live_app, fake_sdk):
