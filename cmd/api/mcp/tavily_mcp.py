@@ -30,6 +30,12 @@ TAVILY_MAP_TOOL_NAME = "tavily_map"
 
 AETHER_WEB_SITE_URL_ENV_VAR = "AETHER_WEB_SITE_URL"
 
+# Pinned on purpose, same reasoning as `cmd/api/mcp/mongo_mcp.py`: `@latest`
+# lets `npx` swap the server's tool schema underneath the application between
+# two runs, which is exactly how the MongoDB integration broke (its `find`
+# gained a required `connectionId` in a major bump nobody asked for).
+TAVILY_MCP_SERVER_PACKAGE = "tavily-mcp@0.2.22"
+
 TAVILY_SEARCH_DESCRIPTION = (
     "Searches the web via Tavily for current information the agent's own "
     "knowledge does not cover. Input is a search query string."
@@ -62,7 +68,7 @@ def _configure_mcp_client(tavily_api_key: str | None = None) -> MultiServerMCPCl
                 "command": "npx",
                 "args": [
                     "-y",
-                    "tavily-mcp@latest",
+                    TAVILY_MCP_SERVER_PACKAGE,
                 ],
                 "env": {
                     "TAVILY_API_KEY": tavily_api_key,

@@ -71,7 +71,7 @@ def test_configure_mcp_client_wires_tavily_over_stdio_with_the_given_key(monkeyp
     config = RecordingMultiServerMCPClient.instances[-1].config["tavily"]
     assert config["transport"] == "stdio"
     assert config["command"] == "npx"
-    assert config["args"] == ["-y", "tavily-mcp@latest"]
+    assert config["args"] == ["-y", "tavily-mcp@0.2.22"]
     assert config["env"] == {"TAVILY_API_KEY": "secret-key"}
 
 
@@ -83,6 +83,14 @@ def test_configure_mcp_client_falls_back_to_the_tavily_api_key_env_var(monkeypat
 
     config = RecordingMultiServerMCPClient.instances[-1].config["tavily"]
     assert config["env"]["TAVILY_API_KEY"] == "from-env"
+
+
+def test_configure_mcp_client_raises_when_no_tavily_api_key_is_available(monkeypatch):
+    monkeypatch.setattr(tavily_mcp, "MultiServerMCPClient", RecordingMultiServerMCPClient)
+    monkeypatch.delenv("TAVILY_API_KEY", raising=False)
+
+    with pytest.raises(RuntimeError, match="TAVILY_API_KEY"):
+        tavily_mcp._configure_mcp_client("")
 
 
 # ---------------------------------------------------------------------------

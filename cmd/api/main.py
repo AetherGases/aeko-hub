@@ -5,6 +5,7 @@ from dotenv import load_dotenv
 from fastapi import FastAPI
 from pymongo import MongoClient
 
+from cmd.api.mcp.mongo_mcp import get_improvement_plan_tools, get_user_memory_tools
 from cmd.api.mcp.tavily_mcp import get_tavily_search_tools, get_tavily_site_map_tool
 from internal.http.improvement_plan_handlers import router as improvement_plan_router
 from internal.http.session_handlers import router as session_router
@@ -44,17 +45,24 @@ AEKO_REPORT_MAX_TOKENS = os.getenv("AEKO_REPORT_MAX_TOKENS")
 TAVILY_SITE_MAP_TOOLS = [AekoTool(tool=tool) for tool in get_tavily_site_map_tool()]
 TAVILY_RESEARCH_TOOLS = [AekoTool(tool=tool) for tool in get_tavily_search_tools()]
 
+# MongoDB MCP: read-only `find`, each pinned in code to one collection (see
+# cmd/api/mcp/mongo_mcp.py) — an agent never chooses the collection itself.
+IMPROVEMENT_PLAN_TOOLS = [AekoTool(tool=tool) for tool in get_improvement_plan_tools()]
+USER_MEMORY_TOOLS = [AekoTool(tool=tool) for tool in get_user_memory_tools()]
+
 # Tools must follow the defined interfaces in Aeko SDK. The keys are the
 # agents' own names, which is what the graph routes by — pass them exactly as
 # the SDK spells them, accents included. `set_tools()` replaces the whole
 # registry, so every agent's tools travel in the single call below.
 AEKO_TOOLS = {
     # FAQ only maps the Aether website — it never gets a free-form search tool.
-    "FAQ": list(TAVILY_SITE_MAP_TOOLS) + list(TAVILY_RESEARCH_TOOLS),
-    "Análista de inventários": [],  # Fill up later....
-    "Analista de Poluentes": list(TAVILY_RESEARCH_TOOLS),
-    "Analista de Gases Verdes": list(TAVILY_RESEARCH_TOOLS),
-    "Coordenador de Melhoria Contínua": list(TAVILY_RESEARCH_TOOLS),
+    "FAQ": list(TAVILY_SITE_MAP_TOOLS) + list(TAVILY_RESEARCH_TOOLS) + list(USER_MEMORY_TOOLS),
+    "Análista de inventários": list(IMPROVEMENT_PLAN_TOOLS) + list(USER_MEMORY_TOOLS),
+    "Analista de Poluentes": list(TAVILY_RESEARCH_TOOLS) + list(IMPROVEMENT_PLAN_TOOLS) + list(USER_MEMORY_TOOLS),
+    "Analista de Gases Verdes": list(TAVILY_RESEARCH_TOOLS) + list(IMPROVEMENT_PLAN_TOOLS) + list(USER_MEMORY_TOOLS),
+    "Coordenador de Melhoria Contínua": list(TAVILY_RESEARCH_TOOLS)
+    + list(IMPROVEMENT_PLAN_TOOLS)
+    + list(USER_MEMORY_TOOLS),
 }
 
 mongo_client = None
@@ -149,7 +157,7 @@ async def lifespan(app: FastAPI):
         db.command("ping")
     except Exception as exc:
         print(f"MongoDB error: {type(exc).__name__}: {exc}")
-        raise
+        raise RuntimeError(f"Failed to connect to MongoDB: {exc}") from exc
     yield
     mongo_client.close()
 
