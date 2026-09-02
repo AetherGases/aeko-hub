@@ -6,6 +6,7 @@ from dotenv import load_dotenv
 from fastapi import FastAPI
 from pymongo import MongoClient
 
+from cmd.api.integrations.climatiq_api import get_climatiq_tools
 from cmd.api.mcp.chroma_mcp import CHROMA_SESSION, get_gases_info_tools
 from cmd.api.mcp.mongo_mcp import (
     MONGO_SESSION,
@@ -64,6 +65,11 @@ USER_MEMORY_TOOLS = [AekoTool(tool=tool) for tool in get_user_memory_tools()]
 # (see cmd/api/mcp/chroma_mcp.py). Only the green gas analyst gets it.
 GASES_INFO_TOOLS = [AekoTool(tool=tool) for tool in get_gases_info_tools()]
 
+# Climatiq's emission factor search and calculator, reached over plain HTTPS
+# rather than MCP (see cmd/api/integrations/climatiq_api.py). Only the
+# pollutant analyst gets them.
+CLIMATIQ_TOOLS = [AekoTool(tool=tool) for tool in get_climatiq_tools()]
+
 # Tools must follow the defined interfaces in Aeko SDK. The keys are the
 # agents' own names, which is what the graph routes by — pass them exactly as
 # the SDK spells them, accents included. `set_tools()` replaces the whole
@@ -72,7 +78,11 @@ AEKO_TOOLS = {
     # FAQ only maps the Aether website — it never gets a free-form search tool.
     "FAQ": list(TAVILY_SITE_MAP_TOOLS) + list(TAVILY_RESEARCH_TOOLS) + list(USER_MEMORY_TOOLS),
     "Análista de inventários": list(IMPROVEMENT_PLAN_TOOLS) + list(USER_MEMORY_TOOLS),
-    "Analista de Poluentes": list(TAVILY_RESEARCH_TOOLS) + list(IMPROVEMENT_PLAN_TOOLS) + list(USER_MEMORY_TOOLS),
+    # The only agent that calculates emissions through Climatiq.
+    "Analista de Poluentes": list(TAVILY_RESEARCH_TOOLS)
+    + list(IMPROVEMENT_PLAN_TOOLS)
+    + list(USER_MEMORY_TOOLS)
+    + list(CLIMATIQ_TOOLS),
     # The only agent that reads the `gases-info` vector store.
     "Analista de Gases Verdes": list(TAVILY_RESEARCH_TOOLS)
     + list(IMPROVEMENT_PLAN_TOOLS)
