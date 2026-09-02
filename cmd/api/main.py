@@ -18,6 +18,7 @@ from cmd.api.mcp.tavily_mcp import (
     get_tavily_search_tools,
     get_tavily_site_map_tool,
 )
+from cmd.api.tools.calculator import get_calculator_tools
 from internal.http.improvement_plan_handlers import router as improvement_plan_router
 from internal.http.session_handlers import router as session_router
 from internal.http.user_handlers import router as user_router
@@ -70,27 +71,41 @@ GASES_INFO_TOOLS = [AekoTool(tool=tool) for tool in get_gases_info_tools()]
 # pollutant analyst gets them.
 CLIMATIQ_TOOLS = [AekoTool(tool=tool) for tool in get_climatiq_tools()]
 
+# Arithmetic, computed in this process (see cmd/api/tools/calculator.py). The
+# one tool below that is nobody's speciality: every agent quotes numbers, and
+# a language model arriving at them by predicting digits is every agent's way
+# of being confidently wrong.
+CALCULATOR_TOOLS = [AekoTool(tool=tool) for tool in get_calculator_tools()]
+
 # Tools must follow the defined interfaces in Aeko SDK. The keys are the
 # agents' own names, which is what the graph routes by — pass them exactly as
 # the SDK spells them, accents included. `set_tools()` replaces the whole
 # registry, so every agent's tools travel in the single call below.
 AEKO_TOOLS = {
     # FAQ only maps the Aether website — it never gets a free-form search tool.
-    "FAQ": list(TAVILY_SITE_MAP_TOOLS) + list(TAVILY_RESEARCH_TOOLS) + list(USER_MEMORY_TOOLS),
-    "Análista de inventários": list(IMPROVEMENT_PLAN_TOOLS) + list(USER_MEMORY_TOOLS),
+    "FAQ": list(TAVILY_SITE_MAP_TOOLS)
+    + list(TAVILY_RESEARCH_TOOLS)
+    + list(USER_MEMORY_TOOLS)
+    + list(CALCULATOR_TOOLS),
+    "Análista de inventários": list(IMPROVEMENT_PLAN_TOOLS)
+    + list(USER_MEMORY_TOOLS)
+    + list(CALCULATOR_TOOLS),
     # The only agent that calculates emissions through Climatiq.
     "Analista de Poluentes": list(TAVILY_RESEARCH_TOOLS)
     + list(IMPROVEMENT_PLAN_TOOLS)
     + list(USER_MEMORY_TOOLS)
-    + list(CLIMATIQ_TOOLS),
+    + list(CLIMATIQ_TOOLS)
+    + list(CALCULATOR_TOOLS),
     # The only agent that reads the `gases-info` vector store.
     "Analista de Gases Verdes": list(TAVILY_RESEARCH_TOOLS)
     + list(IMPROVEMENT_PLAN_TOOLS)
     + list(USER_MEMORY_TOOLS)
-    + list(GASES_INFO_TOOLS),
+    + list(GASES_INFO_TOOLS)
+    + list(CALCULATOR_TOOLS),
     "Coordenador de Melhoria Contínua": list(TAVILY_RESEARCH_TOOLS)
     + list(IMPROVEMENT_PLAN_TOOLS)
-    + list(USER_MEMORY_TOOLS),
+    + list(USER_MEMORY_TOOLS)
+    + list(CALCULATOR_TOOLS),
 }
 
 # Every MCP server this application talks to keeps one session open for the
