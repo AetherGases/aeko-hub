@@ -11,6 +11,8 @@ in-memory repositories so a journey can be followed without a Mongo server.
 """
 
 import re
+import threading
+import time
 from datetime import datetime, timedelta
 from pathlib import Path
 
@@ -260,6 +262,75 @@ def test_lifespan_pings_the_database_and_closes_the_client(api_main):
 
     assert client.database.commands == ["ping"]
     assert client.closed is True
+
+
+class FakeMCPSession:
+    """One MCP session as the application holds it, without a server behind it."""
+
+    def __init__(self, name, fails_with=None):
+        self.name = name
+        self.fails_with = fails_with
+        self.started = threading.Event()
+        self.closed = False
+
+    def start(self):
+        self.started.set()
+        if self.fails_with is not None:
+            raise self.fails_with
+
+    def close(self):
+        self.closed = True
+
+
+def printed_within(capsys, needle, timeout=5.0):
+    """Wait for a background thread's `print` to arrive."""
+    deadline = time.monotonic() + timeout
+    output = ""
+    while time.monotonic() < deadline:
+        output += capsys.readouterr().out
+        if needle in output:
+            return True
+        time.sleep(0.05)
+    return False
+
+
+def test_lifespan_warms_up_every_mcp_session_and_closes_it_afterwards(api_main, monkeypatch):
+    """Opening the sessions at start-up is what keeps the cold start off the
+    first user's question; closing them is what keeps the server processes
+    from outliving the API."""
+    sessions = (FakeMCPSession("tavily"), FakeMCPSession("mongodb"), FakeMCPSession("chroma"))
+    monkeypatch.setattr(api_main, "MCP_SESSIONS", sessions)
+    monkeypatch.setattr(api_main, "MCP_WARM_UP", "true")
+
+    with TestClient(api_main.app):
+        for session in sessions:
+            assert session.started.wait(timeout=5), f"{session.name} was never started"
+
+    assert [session.closed for session in sessions] == [True, True, True]
+
+
+def test_lifespan_spawns_no_mcp_server_when_warm_up_is_switched_off(api_main, monkeypatch):
+    """What the test suite itself relies on — see `AEKO_MCP_WARM_UP` in conftest."""
+    session = FakeMCPSession("chroma")
+    monkeypatch.setattr(api_main, "MCP_SESSIONS", (session,))
+    monkeypatch.setattr(api_main, "MCP_WARM_UP", "false")
+
+    with TestClient(api_main.app):
+        pass
+
+    assert session.started.is_set() is False
+    assert session.closed is True
+
+
+def test_lifespan_starts_even_when_an_mcp_server_refuses_to(api_main, monkeypatch, capsys):
+    """A broken integration must not take the whole API down with it."""
+    session = FakeMCPSession("chroma", fails_with=RuntimeError("CHROMA_API_KEY is not set."))
+    monkeypatch.setattr(api_main, "MCP_SESSIONS", (session,))
+    monkeypatch.setattr(api_main, "MCP_WARM_UP", "true")
+
+    with TestClient(api_main.app) as client:
+        assert client.get("/aether-api/v1/ai/user/12345").status_code in (200, 404, 503)
+        assert printed_within(capsys, "CHROMA_API_KEY")
 
 
 IMPORTS_THE_SDK = re.compile(r"^\s*(?:from|import)\s+aeko\b", re.MULTILINE)

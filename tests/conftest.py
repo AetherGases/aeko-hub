@@ -36,6 +36,11 @@ os.environ["AEKO_SLOW_MODEL"] = "slow-model"
 os.environ["AEKO_MAX_TOKENS"] = "512"
 os.environ["AEKO_REPORT_MAX_TOKENS"] = "4096"
 
+# The application opens every MCP session when it starts, which spawns the
+# servers themselves (`npx`, and a Python process that loads a 768-dimension
+# model). No test may do that: the suite fakes the MCP clients instead.
+os.environ["AEKO_MCP_WARM_UP"] = "false"
+
 # The 1.x variables are gone; clearing them keeps a developer's local `.env`
 # from making a stale name look supported.
 os.environ.pop("AEKO_MODEL_LIST", None)
