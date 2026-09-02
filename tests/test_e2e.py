@@ -184,9 +184,21 @@ TAVILY_RESEARCH_AGENTS = {
 }
 
 
+# The one tool nobody is singled out for: arithmetic is every agent's problem,
+# and a language model predicting digits is every agent's failure mode (see
+# `cmd/api/tools/calculator.py`).
+CALCULATOR_TOOL_NAME = "calculator"
+
+
 def test_faq_gets_the_site_map_and_user_memory_tools(live_app, fake_sdk):
     tool_names = {tool.name for tool in fake_sdk.RUNTIME.tools["FAQ"]}
-    assert tool_names == {"tavily_map", "tavily_search", "tavily_research", "find_user_memory"}
+    assert tool_names == {
+        "tavily_map",
+        "tavily_search",
+        "tavily_research",
+        "find_user_memory",
+        CALCULATOR_TOOL_NAME,
+    }
 
 
 @pytest.mark.parametrize("agent", sorted(TAVILY_RESEARCH_AGENTS))
@@ -197,6 +209,7 @@ def test_research_agents_get_search_research_and_mongo_tools(live_app, fake_sdk,
         "tavily_research",
         "find_improvement_plan",
         "find_user_memory",
+        CALCULATOR_TOOL_NAME,
     }
 
 
@@ -209,6 +222,7 @@ def test_green_gas_analyst_also_gets_the_chroma_vector_search(live_app, fake_sdk
         "find_improvement_plan",
         "find_user_memory",
         "query_gases_info",
+        CALCULATOR_TOOL_NAME,
     }
 
 
@@ -232,6 +246,7 @@ def test_pollutant_analyst_also_gets_the_climatiq_calculator(live_app, fake_sdk)
         "tavily_research",
         "find_improvement_plan",
         "find_user_memory",
+        CALCULATOR_TOOL_NAME,
     } | CLIMATIQ_TOOL_NAMES
 
 
@@ -246,7 +261,47 @@ def test_no_other_agent_can_reach_climatiq(live_app, fake_sdk, agent):
 
 def test_inventory_analyst_gets_no_tavily_tools_but_gets_mongo_tools(live_app, fake_sdk):
     tool_names = {tool.name for tool in fake_sdk.RUNTIME.tools["Análista de inventários"]}
-    assert tool_names == {"find_improvement_plan", "find_user_memory"}
+    assert tool_names == {"find_improvement_plan", "find_user_memory", CALCULATOR_TOOL_NAME}
+
+
+# ---------------------------------------------------------------------------
+# The calculator: the one tool every agent gets
+# ---------------------------------------------------------------------------
+@pytest.mark.parametrize("agent", sorted(TOOLED_AGENTS))
+def test_every_agent_gets_the_calculator(live_app, fake_sdk, agent):
+    """Unlike Chroma and Climatiq, this one is not anybody's speciality.
+
+    Every agent quotes numbers, and none of them can be trusted to do the
+    arithmetic in its own head — so the rule is the mirror image of the guard
+    tests above: not "only this agent", but "no agent without it".
+    """
+    tool_names = {tool.name for tool in fake_sdk.RUNTIME.tools[agent]}
+
+    assert CALCULATOR_TOOL_NAME in tool_names
+
+
+def test_the_calculator_the_agents_get_actually_calculates(live_app, fake_sdk):
+    """The registry holds the real tool, not a name that resolves to nothing."""
+    tools = fake_sdk.RUNTIME.tools["Analista de Poluentes"]
+    calculator = next(tool for tool in tools if tool.name == CALCULATOR_TOOL_NAME)
+
+    assert calculator.tool.func("(1200 * 2.68) / 1000") == "3.216"
+
+
+def test_the_same_calculator_is_registered_for_every_agent(live_app, fake_sdk):
+    """One built tool, five registries — as with Tavily and Climatiq next door.
+
+    A LangChain `Tool` here is a name, a description and a pure function, so
+    there is nothing per-agent to keep apart and nothing to be mutated.
+    """
+    calculators = {
+        id(tool.tool)
+        for agent in TOOLED_AGENTS
+        for tool in fake_sdk.RUNTIME.tools[agent]
+        if tool.name == CALCULATOR_TOOL_NAME
+    }
+
+    assert len(calculators) == 1
 
 
 def test_lifespan_publishes_sdk_factories_on_app_state(live_app, fake_sdk):
