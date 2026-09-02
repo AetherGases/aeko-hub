@@ -176,10 +176,10 @@ def test_lifespan_registers_every_agent_in_a_single_call(live_app, fake_sdk):
 
 
 # Agents that get general web research tools via the Tavily MCP integration.
-# "Analista de Gases Verdes" belongs to this group too, but it alone also gets
-# the ChromaDB vector search, so it has a test of its own below.
+# Two of them belong to this group but each also gets one integration nobody
+# else does — "Analista de Gases Verdes" the ChromaDB vector search, "Analista
+# de Poluentes" the Climatiq calculator — so both have tests of their own below.
 TAVILY_RESEARCH_AGENTS = {
-    "Analista de Poluentes",
     "Coordenador de Melhoria Contínua",
 }
 
@@ -219,6 +219,29 @@ def test_green_gas_analyst_also_gets_the_chroma_vector_search(live_app, fake_sdk
 def test_no_other_agent_can_reach_the_gases_info_collection(live_app, fake_sdk, agent):
     tool_names = {tool.name for tool in fake_sdk.RUNTIME.tools[agent]}
     assert "query_gases_info" not in tool_names
+
+
+CLIMATIQ_TOOL_NAMES = {"climatiq_search", "climatiq_estimate"}
+
+
+def test_pollutant_analyst_also_gets_the_climatiq_calculator(live_app, fake_sdk):
+    """Only this agent calculates emissions through Climatiq (see the Feature/45 card)."""
+    tool_names = {tool.name for tool in fake_sdk.RUNTIME.tools["Analista de Poluentes"]}
+    assert tool_names == {
+        "tavily_search",
+        "tavily_research",
+        "find_improvement_plan",
+        "find_user_memory",
+    } | CLIMATIQ_TOOL_NAMES
+
+
+@pytest.mark.parametrize(
+    "agent",
+    sorted(TOOLED_AGENTS - {"Analista de Poluentes"}),
+)
+def test_no_other_agent_can_reach_climatiq(live_app, fake_sdk, agent):
+    tool_names = {tool.name for tool in fake_sdk.RUNTIME.tools[agent]}
+    assert tool_names.isdisjoint(CLIMATIQ_TOOL_NAMES)
 
 
 def test_inventory_analyst_gets_no_tavily_tools_but_gets_mongo_tools(live_app, fake_sdk):
