@@ -18,13 +18,14 @@ collection the agent never chooses itself, mirroring how
   read a user's stored memories.
 """
 
-import asyncio
 import json
 import os
 from typing import Any
 
 from langchain_core.tools import Tool
 from langchain_mcp_adapters.client import MultiServerMCPClient
+
+from .mcp_session import PersistentMCPSession
 
 MONGO_FIND_TOOL_NAME = "find"
 
@@ -89,25 +90,15 @@ def _configure_mcp_client(mongo_uri: str | None = None) -> MultiServerMCPClient:
     )
 
 
-async def _run_mongo_tool(client: MultiServerMCPClient, tool_name: str, **kwargs: Any) -> Any:
-    """Fetch the MCP server's tools and invoke the one named `tool_name`."""
-
-    available_tools = await client.get_tools()
-    for tool in available_tools:
-        if tool.name == tool_name:
-            return await tool.ainvoke(kwargs)
-
-    known = ", ".join(sorted(tool.name for tool in available_tools))
-    raise LookupError(
-        f"'{tool_name}' is not exposed by the mongodb MCP server. Available tools: {known}."
-    )
+# One session for the whole process, so a query no longer pays two `npx`
+# spawns (one to list the tools, one to call `find`) before it reaches Mongo.
+MONGO_SESSION = PersistentMCPSession("mongodb", lambda: _configure_mcp_client())
 
 
 def _call_mongo_tool(tool_name: str, **kwargs: Any) -> Any:
-    """Synchronous bridge: builds a client and runs one MCP tool call."""
+    """Synchronous bridge: one MCP tool call over the shared session."""
 
-    client = _configure_mcp_client()
-    return asyncio.run(_run_mongo_tool(client, tool_name, **kwargs))
+    return MONGO_SESSION.call_tool(tool_name, **kwargs)
 
 
 def _database_name() -> str:

@@ -17,7 +17,6 @@ The server pins the collection and the embedding model; this side only carries
 credentials and the agent's search text.
 """
 
-import asyncio
 import os
 import sys
 from pathlib import Path
@@ -25,6 +24,8 @@ from typing import Any
 
 from langchain_core.tools import Tool
 from langchain_mcp_adapters.client import MultiServerMCPClient
+
+from .mcp_session import PersistentMCPSession
 
 QUERY_GASES_INFO_TOOL_NAME = "query_gases_info"
 
@@ -126,25 +127,18 @@ def _configure_mcp_client(
     )
 
 
-async def _run_chroma_tool(client: MultiServerMCPClient, tool_name: str, **kwargs: Any) -> Any:
-    """Fetch the MCP server's tools and invoke the one named `tool_name`."""
-
-    available_tools = await client.get_tools()
-    for tool in available_tools:
-        if tool.name == tool_name:
-            return await tool.ainvoke(kwargs)
-
-    known = ", ".join(sorted(tool.name for tool in available_tools))
-    raise LookupError(
-        f"'{tool_name}' is not exposed by the chroma MCP server. Available tools: {known}."
-    )
+# One session for the whole process. This is the integration that made the
+# shared session necessary: spawning the server per call meant importing torch
+# and loading the model twice per question, 103 seconds for two seconds of
+# search. The client is built lazily so a missing credential is still reported
+# on the call that needs it.
+CHROMA_SESSION = PersistentMCPSession("chroma", lambda: _configure_mcp_client())
 
 
 def _call_chroma_tool(tool_name: str, **kwargs: Any) -> Any:
-    """Synchronous bridge: builds a client and runs one MCP tool call."""
+    """Synchronous bridge: one MCP tool call over the shared session."""
 
-    client = _configure_mcp_client()
-    return asyncio.run(_run_chroma_tool(client, tool_name, **kwargs))
+    return CHROMA_SESSION.call_tool(tool_name, **kwargs)
 
 
 def _parse_query(query: str | list[str] | None) -> list[str]:
