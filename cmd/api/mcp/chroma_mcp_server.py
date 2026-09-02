@@ -23,6 +23,7 @@ Read-only by construction: the only tool exposed is a query.
 """
 
 import os
+import sys
 from typing import Any
 
 from chromadb import CloudClient
@@ -132,7 +133,37 @@ def query_gases_info(
 
 
 def main() -> None:
-    """Entry point: serve over stdio, which is how the API spawns this."""
+    """Entry point: serve over stdio, which is how the API spawns this.
+
+    Both statements below run before a single request is served, and both are
+    here rather than at module level so that merely importing this module —
+    which the test suite does — costs nothing.
+    """
+
+    # Load-bearing, not tidiness, and the reason this server used to hang for
+    # ever. `SentenceTransformerEmbeddingFunction` imports
+    # `sentence_transformers` lazily, inside its own constructor, and FastMCP
+    # runs a synchronous tool on a worker thread (see the note on
+    # `query_gases_info`) — on Windows that import deadlocks in the
+    # C-extension loader, down in `scipy.special`, and never returns. It was
+    # measured: three `faulthandler` dumps ninety seconds apart with the stack
+    # identical frame for frame, while the same construction on the main
+    # thread finishes in about thirty seconds. Importing it here puts the
+    # whole chain on the main thread, at start-up.
+    import sentence_transformers  # noqa: F401
+
+    # Resolve the collection before answering anything, so the model weights
+    # and the Chroma handle are already in memory when the first query
+    # arrives. The API keeps one session open for its whole life, so this cost
+    # is paid once per application start rather than once per question.
+    #
+    # A failure here is deliberately not fatal: bad credentials should surface
+    # as an error on the query that needs them, not as a server that refuses
+    # to start.
+    try:
+        _get_collection()
+    except Exception as exc:
+        print(f"chroma warm-up failed: {type(exc).__name__}: {exc}", file=sys.stderr)
 
     mcp.run(transport="stdio")
 

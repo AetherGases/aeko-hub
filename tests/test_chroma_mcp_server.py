@@ -18,6 +18,9 @@ What is worth pinning down:
 """
 
 import asyncio
+import inspect
+import sys
+import types
 
 import pytest
 
@@ -162,7 +165,16 @@ def test_get_collection_is_resolved_once_per_process(monkeypatch):
 # query_gases_info — the only tool the server exposes.
 # ---------------------------------------------------------------------------
 def query(**kwargs):
-    return asyncio.run(chroma_mcp_server.query_gases_info(**kwargs))
+    """Call the tool whether `@mcp.tool()` hands back the function or a coroutine.
+
+    The installed `mcp` registers the tool and returns the plain synchronous
+    function, so awaiting it is wrong; older versions handed back something
+    awaitable. Accepting both keeps this suite from turning a dependency bump
+    into four red tests that say nothing about the server.
+    """
+
+    result = chroma_mcp_server.query_gases_info(**kwargs)
+    return asyncio.run(result) if inspect.isawaitable(result) else result
 
 
 def test_query_gases_info_searches_the_pinned_collection(monkeypatch):
@@ -208,12 +220,53 @@ def test_query_gases_info_returns_text_and_never_raw_vectors(monkeypatch):
 # ---------------------------------------------------------------------------
 # main — how `cmd/api/mcp/chroma_mcp.py` starts this process.
 # ---------------------------------------------------------------------------
-def test_main_serves_over_stdio(monkeypatch):
+@pytest.fixture
+def started_server(monkeypatch):
+    """`main()` with its two expensive start-up steps observable and cheap.
+
+    `main()` imports `sentence_transformers` for real — that import is the
+    whole reason the server used to deadlock, so it belongs there — but it
+    costs half a minute and a gigabyte, which no test should pay. A stub in
+    `sys.modules` makes the import a lookup.
+    """
+
+    monkeypatch.setitem(sys.modules, "sentence_transformers", types.ModuleType("sentence_transformers"))
+
     transports = []
     monkeypatch.setattr(
         chroma_mcp_server.mcp, "run", lambda transport: transports.append(transport)
     )
+    return transports
+
+
+def test_main_serves_over_stdio(monkeypatch, started_server):
+    monkeypatch.setattr(chroma_mcp_server, "_get_collection", lambda: FakeCollection())
 
     chroma_mcp_server.main()
 
-    assert transports == ["stdio"]
+    assert started_server == ["stdio"]
+
+
+def test_main_warms_the_collection_up_before_serving(monkeypatch, started_server):
+    """The API holds one session open, so this cost is paid once, not per query."""
+    warmed = []
+    monkeypatch.setattr(
+        chroma_mcp_server, "_get_collection", lambda: warmed.append(1) or FakeCollection()
+    )
+
+    chroma_mcp_server.main()
+
+    assert warmed == [1]
+
+
+def test_main_still_serves_when_the_warm_up_fails(monkeypatch, started_server):
+    """Bad credentials belong in the answer to a query, not in a dead server."""
+
+    def explode():
+        raise RuntimeError("CHROMA_API_KEY is not set in the MCP server's environment.")
+
+    monkeypatch.setattr(chroma_mcp_server, "_get_collection", explode)
+
+    chroma_mcp_server.main()
+
+    assert started_server == ["stdio"]
