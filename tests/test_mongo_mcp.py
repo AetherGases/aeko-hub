@@ -21,11 +21,11 @@ needed:
 import pytest
 from langchain_core.tools import Tool
 
-from cmd.api.mcp import mongo_mcp
+from cmd.api.mcp import mongo_mcp, mcp_session
 
 
 class FakeMCPTool:
-    """Stands in for a tool `MultiServerMCPClient.get_tools()` would return."""
+    """Stands in for a tool the MCP session would expose."""
 
     def __init__(self, name, result=None):
         self.name = name
@@ -38,12 +38,46 @@ class FakeMCPTool:
         return self.result
 
 
+class FakeMCPSession:
+    """The `ClientSession` the persistent session opens once and reuses."""
+
+    def __init__(self, tools):
+        self.tools = tools
+
+
+class FakeSessionContext:
+    """`MultiServerMCPClient.session()` is an async context manager."""
+
+    def __init__(self, tools):
+        self.session = FakeMCPSession(tools)
+        self.exited = False
+
+    async def __aenter__(self):
+        return self.session
+
+    async def __aexit__(self, *exc_info):
+        self.exited = True
+        return False
+
+
 class FakeMCPClient:
+    """Stands in for `MultiServerMCPClient`, whose session is now kept open.
+
+    The tools are no longer fetched per call: the session is opened once and
+    every later call reuses it, so what a test hands over is the session the
+    server would have given.
+    """
+
     def __init__(self, tools):
         self._tools = tools
+        self.server_name = None
+        self.contexts = []
 
-    async def get_tools(self):
-        return self._tools
+    def session(self, server_name):
+        self.server_name = server_name
+        context = FakeSessionContext(self._tools)
+        self.contexts.append(context)
+        return context
 
 
 class RecordingMultiServerMCPClient:
@@ -60,6 +94,25 @@ class RecordingMultiServerMCPClient:
 def reset_recorder():
     RecordingMultiServerMCPClient.instances = []
     yield
+
+
+@pytest.fixture(autouse=True)
+def fresh_mcp_session(monkeypatch):
+    """No MCP session survives a test.
+
+    The real session is cached for the life of the process, which is the point
+    of it — but that would also leak one test's fake server into the next, so
+    it is closed on both sides of every test. `load_mcp_tools` is replaced
+    because the genuine one would speak MCP to the fake session.
+    """
+
+    async def load_tools(session, **kwargs):
+        return session.tools
+
+    monkeypatch.setattr(mcp_session, "load_mcp_tools", load_tools)
+    mongo_mcp.MONGO_SESSION.close()
+    yield
+    mongo_mcp.MONGO_SESSION.close()
 
 
 # ---------------------------------------------------------------------------

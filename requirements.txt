@@ -1,16 +1,36 @@
 # Runtime
 aeko>=2.0.0,<3.0.0
-fastapi>=0.115.0
-uvicorn[standard]>=0.30.0
-pydantic>=2.13.4
-pymongo>=4.9.0
-python-dotenv>=1.2.3
-boto3>=1.35.0
-openpyxl>=3.1.0
-requests>=2.34.2
+fastapi>=0.115.0,<1.0.0
+uvicorn[standard]>=0.30.0,<1.0.0
+pydantic>=2.13.4,<3.0.0
+pymongo>=4.9.0,<5.0.0
+python-dotenv>=1.2.3,<2.0.0
+boto3>=1.35.0,<2.0.0
+openpyxl>=3.1.0,<4.0.0
+requests>=2.34.2,<3.0.0
+
+# MCP integrations. `langchain-core` is a direct dependency, not an incidental
+# one: every integration in `cmd/api/mcp/` builds `Tool` objects with it, and
+# `mcp_session.py` types against `BaseTool`. Leaving it to arrive underneath
+# `langchain-mcp-adapters` means a change in that package's own dependencies
+# can take our imports away without a single line of ours changing.
+langchain-core>=1.0.0,<2.0.0
 langchain-mcp-adapters>=0.3.0,<0.4.0
 
+# The `gases-info` vector search. The published `chroma-mcp` server is not used
+# (it cannot reach Chroma Cloud and cannot embed with our model - see
+# cmd/api/mcp/chroma_mcp_server.py), so the server is ours and these are its
+# direct dependencies. `sentence-transformers` pulls torch.
+#
+# The upper bounds are not decoration. This project has been broken twice by
+# an unpinned MCP dependency changing underneath it: `mongodb-mcp-server` made
+# `connectionId` required in a major bump, and `mcp` changed what
+# `@mcp.tool()` hands back, which quietly turned four tests red.
+mcp>=1.6.0,<2.0.0
+chromadb>=1.5.0,<2.0.0
+sentence-transformers>=5.0.0,<7.0.0
+
 # Test
-pytest>=8.4.2
-httpx>=0.28.1
-pytest-cov>=5.0.0
+pytest>=8.4.2,<9.0.0
+pytest-cov>=5.0.0,<8.0.0
+httpx>=0.28.1,<1.0.0

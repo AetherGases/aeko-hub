@@ -1,12 +1,22 @@
 from contextlib import asynccontextmanager
 import os
+import threading
 
 from dotenv import load_dotenv
 from fastapi import FastAPI
 from pymongo import MongoClient
 
-from cmd.api.mcp.mongo_mcp import get_improvement_plan_tools, get_user_memory_tools
-from cmd.api.mcp.tavily_mcp import get_tavily_search_tools, get_tavily_site_map_tool
+from cmd.api.mcp.chroma_mcp import CHROMA_SESSION, get_gases_info_tools
+from cmd.api.mcp.mongo_mcp import (
+    MONGO_SESSION,
+    get_improvement_plan_tools,
+    get_user_memory_tools,
+)
+from cmd.api.mcp.tavily_mcp import (
+    TAVILY_SESSION,
+    get_tavily_search_tools,
+    get_tavily_site_map_tool,
+)
 from internal.http.improvement_plan_handlers import router as improvement_plan_router
 from internal.http.session_handlers import router as session_router
 from internal.http.user_handlers import router as user_router
@@ -50,6 +60,10 @@ TAVILY_RESEARCH_TOOLS = [AekoTool(tool=tool) for tool in get_tavily_search_tools
 IMPROVEMENT_PLAN_TOOLS = [AekoTool(tool=tool) for tool in get_improvement_plan_tools()]
 USER_MEMORY_TOOLS = [AekoTool(tool=tool) for tool in get_user_memory_tools()]
 
+# ChromaDB MCP: vector search over the `gases-info` collection, pinned in code
+# (see cmd/api/mcp/chroma_mcp.py). Only the green gas analyst gets it.
+GASES_INFO_TOOLS = [AekoTool(tool=tool) for tool in get_gases_info_tools()]
+
 # Tools must follow the defined interfaces in Aeko SDK. The keys are the
 # agents' own names, which is what the graph routes by — pass them exactly as
 # the SDK spells them, accents included. `set_tools()` replaces the whole
@@ -59,11 +73,24 @@ AEKO_TOOLS = {
     "FAQ": list(TAVILY_SITE_MAP_TOOLS) + list(TAVILY_RESEARCH_TOOLS) + list(USER_MEMORY_TOOLS),
     "Análista de inventários": list(IMPROVEMENT_PLAN_TOOLS) + list(USER_MEMORY_TOOLS),
     "Analista de Poluentes": list(TAVILY_RESEARCH_TOOLS) + list(IMPROVEMENT_PLAN_TOOLS) + list(USER_MEMORY_TOOLS),
-    "Analista de Gases Verdes": list(TAVILY_RESEARCH_TOOLS) + list(IMPROVEMENT_PLAN_TOOLS) + list(USER_MEMORY_TOOLS),
+    # The only agent that reads the `gases-info` vector store.
+    "Analista de Gases Verdes": list(TAVILY_RESEARCH_TOOLS)
+    + list(IMPROVEMENT_PLAN_TOOLS)
+    + list(USER_MEMORY_TOOLS)
+    + list(GASES_INFO_TOOLS),
     "Coordenador de Melhoria Contínua": list(TAVILY_RESEARCH_TOOLS)
     + list(IMPROVEMENT_PLAN_TOOLS)
     + list(USER_MEMORY_TOOLS),
 }
+
+# Every MCP server this application talks to keeps one session open for the
+# life of the process (see `cmd/api/mcp/mcp_session.py`).
+MCP_SESSIONS = (TAVILY_SESSION, MONGO_SESSION, CHROMA_SESSION)
+
+# Opening those sessions starts the server processes, which is the whole cost
+# of a cold start — for Chroma, importing torch and loading model weights. The
+# test suite sets this to "false" so running the tests never spawns a server.
+MCP_WARM_UP = os.getenv("AEKO_MCP_WARM_UP", "true")
 
 mongo_client = None
 db = None
@@ -71,6 +98,25 @@ db = None
 
 def _int_or_none(value: str | None) -> int | None:
     return int(value) if value else None
+
+
+def _warm_up_mcp_sessions() -> None:
+    """Start every MCP server now, in the background.
+
+    In the background because the sessions must not hold up the port: the API
+    answers immediately, and the servers finish waking while the first user is
+    still typing. A session that fails to open is reported and left alone —
+    the call that needs it will try again and raise properly.
+    """
+
+    def warm_up(session) -> None:
+        try:
+            session.start()
+        except Exception as exc:
+            print(f"MCP warm-up failed for {session.name}: {type(exc).__name__}: {exc}")
+
+    for session in MCP_SESSIONS:
+        threading.Thread(target=warm_up, args=(session,), daemon=True).start()
 
 
 def build_messenger(user, memories) -> AekoMessenger:
@@ -158,7 +204,18 @@ async def lifespan(app: FastAPI):
     except Exception as exc:
         print(f"MongoDB error: {type(exc).__name__}: {exc}")
         raise RuntimeError(f"Failed to connect to MongoDB: {exc}") from exc
+
+    if MCP_WARM_UP.strip().lower() not in {"false", "0", "no"}:
+        _warm_up_mcp_sessions()
+
     yield
+
+    # Each open session owns a server process — the Chroma one holding a
+    # gigabyte of model weights. Closing them here is what keeps them from
+    # outliving the API.
+    for session in MCP_SESSIONS:
+        session.close()
+
     mongo_client.close()
 
 OPENAPI_TAGS = [
