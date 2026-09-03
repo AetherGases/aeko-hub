@@ -1,4 +1,9 @@
-"""One module per tool that runs here, in this process.
+"""The tools that run here, in this process — one module per subject.
+
+Per subject rather than per tool: `calculator.py` is one tool because
+arithmetic is one thing to ask for, while `finance.py` is two because ROI and
+payback are two decisions arrived at through the same discounting, and
+splitting that across modules would split the calculation with it.
 
 This is the third of three packages that produce agent tools, and the rule
 that separates them is what is on the other end of the call:
