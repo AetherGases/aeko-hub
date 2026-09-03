@@ -175,13 +175,11 @@ def test_lifespan_registers_every_agent_in_a_single_call(live_app, fake_sdk):
     assert len(fake_sdk.RUNTIME.set_tools_calls) == 1
 
 
-# Agents that get general web research tools via the Tavily MCP integration.
-# Two of them belong to this group but each also gets one integration nobody
-# else does — "Analista de Gases Verdes" the ChromaDB vector search, "Analista
-# de Poluentes" the Climatiq calculator — so both have tests of their own below.
-TAVILY_RESEARCH_AGENTS = {
-    "Coordenador de Melhoria Contínua",
-}
+# Every agent that gets the general web research tools of the Tavily MCP
+# integration also gets one integration nobody else does — "Analista de Gases
+# Verdes" the ChromaDB vector search, "Analista de Poluentes" the Climatiq
+# calculator, "Coordenador de Melhoria Contínua" the ROI and payback tools —
+# so each of them has a test of its own below, asserting its whole tool set.
 
 
 # The one tool nobody is singled out for: arithmetic is every agent's problem,
@@ -201,16 +199,30 @@ def test_faq_gets_the_site_map_and_user_memory_tools(live_app, fake_sdk):
     }
 
 
-@pytest.mark.parametrize("agent", sorted(TAVILY_RESEARCH_AGENTS))
-def test_research_agents_get_search_research_and_mongo_tools(live_app, fake_sdk, agent):
-    tool_names = {tool.name for tool in fake_sdk.RUNTIME.tools[agent]}
+ROI_TOOL_NAMES = {"calculate_roi", "calculate_payback"}
+
+
+def test_continuous_improvement_coordinator_also_gets_the_roi_tools(live_app, fake_sdk):
+    """Only this agent weighs an investment: it is the one that proposes them."""
+    tool_names = {
+        tool.name for tool in fake_sdk.RUNTIME.tools["Coordenador de Melhoria Contínua"]
+    }
     assert tool_names == {
         "tavily_search",
         "tavily_research",
         "find_improvement_plan",
         "find_user_memory",
         CALCULATOR_TOOL_NAME,
-    }
+    } | ROI_TOOL_NAMES
+
+
+@pytest.mark.parametrize(
+    "agent",
+    sorted(TOOLED_AGENTS - {"Coordenador de Melhoria Contínua"}),
+)
+def test_no_other_agent_can_reach_the_roi_tools(live_app, fake_sdk, agent):
+    tool_names = {tool.name for tool in fake_sdk.RUNTIME.tools[agent]}
+    assert tool_names.isdisjoint(ROI_TOOL_NAMES)
 
 
 def test_green_gas_analyst_also_gets_the_chroma_vector_search(live_app, fake_sdk):

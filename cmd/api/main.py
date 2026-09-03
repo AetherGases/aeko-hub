@@ -19,6 +19,7 @@ from cmd.api.mcp.tavily_mcp import (
     get_tavily_site_map_tool,
 )
 from cmd.api.tools.calculator import get_calculator_tools
+from cmd.api.tools.finance import get_roi_payback_tools
 from internal.http.improvement_plan_handlers import router as improvement_plan_router
 from internal.http.session_handlers import router as session_router
 from internal.http.user_handlers import router as user_router
@@ -77,6 +78,12 @@ CLIMATIQ_TOOLS = [AekoTool(tool=tool) for tool in get_climatiq_tools()]
 # of being confidently wrong.
 CALCULATOR_TOOLS = [AekoTool(tool=tool) for tool in get_calculator_tools()]
 
+# ROI and payback over a fixed 60-month horizon, computed in this process as
+# well (see cmd/api/tools/finance.py). Only the improvement coordinator
+# gets them: it is the one agent that proposes spending money, and these are
+# the two questions its proposals are judged by.
+ROI_PAYBACK_TOOLS = [AekoTool(tool=tool) for tool in get_roi_payback_tools()]
+
 # Tools must follow the defined interfaces in Aeko SDK. The keys are the
 # agents' own names, which is what the graph routes by — pass them exactly as
 # the SDK spells them, accents included. `set_tools()` replaces the whole
@@ -102,10 +109,12 @@ AEKO_TOOLS = {
     + list(USER_MEMORY_TOOLS)
     + list(GASES_INFO_TOOLS)
     + list(CALCULATOR_TOOLS),
+    # The only agent that weighs an investment before proposing it.
     "Coordenador de Melhoria Contínua": list(TAVILY_RESEARCH_TOOLS)
     + list(IMPROVEMENT_PLAN_TOOLS)
     + list(USER_MEMORY_TOOLS)
-    + list(CALCULATOR_TOOLS),
+    + list(CALCULATOR_TOOLS)
+    + list(ROI_PAYBACK_TOOLS),
 }
 
 # Every MCP server this application talks to keeps one session open for the
