@@ -27,6 +27,8 @@ from langchain_mcp_adapters.client import MultiServerMCPClient
 
 from .mcp_session import PersistentMCPSession
 
+from shared import Module, logged
+
 MONGO_FIND_TOOL_NAME = "find"
 
 MONGO_URI_ENV_VAR = "MONGO_URI"
@@ -154,10 +156,12 @@ def _find_in_collection(collection: str, filter_json: str | dict[str, Any] | Non
     )
 
 
+@logged(Module.TOOL, "find_improvement_plan")
 def _find_improvement_plan(filter_json: str | dict[str, Any] | None = "") -> Any:
     return _find_in_collection(IMPROVEMENT_PLAN_COLLECTION, filter_json)
 
 
+@logged(Module.TOOL, "find_user_memory")
 def _find_user_memory(filter_json: str | dict[str, Any] | None = "") -> Any:
     return _find_in_collection(USER_MEMORY_COLLECTION, filter_json)
 

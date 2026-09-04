@@ -20,9 +20,22 @@ from cmd.api.mcp.tavily_mcp import (
 )
 from cmd.api.tools.calculator import get_calculator_tools
 from cmd.api.tools.finance import get_roi_payback_tools
+from hub_metrics.database.repository import Repository as HubMetricsRepository
+from hub_metrics.entity import Metric
+from hub_metrics.service import Service as HubMetricsService
+from internal.http.hub_metrics_handlers import router as hub_metrics_router
 from internal.http.improvement_plan_handlers import router as improvement_plan_router
 from internal.http.session_handlers import router as session_router
 from internal.http.user_handlers import router as user_router
+from shared import (
+    Event,
+    Module,
+    RequestLogMiddleware,
+    log_failure,
+    operation,
+    set_event_sink,
+    silence_uvicorn_access_log,
+)
 
 # Single entry point for all aeko imports. Every other module receives
 # SDK instances/DTOs through dependency injection instead of importing the
@@ -145,9 +158,15 @@ def _warm_up_mcp_sessions() -> None:
 
     def warm_up(session) -> None:
         try:
+            # `start()` logs the server's cold start itself, blue or red.
+            # What is added here is that the warm-up gave up on it: the API
+            # is now serving with that server unopened.
             session.start()
         except Exception as exc:
-            print(f"MCP warm-up failed for {session.name}: {type(exc).__name__}: {exc}")
+            log_failure(
+                Module.MCP,
+                f"{session.name}.warm_up gave up: {type(exc).__name__}: {exc}",
+            )
 
     for session in MCP_SESSIONS:
         threading.Thread(target=warm_up, args=(session,), daemon=True).start()
@@ -203,6 +222,33 @@ def build_session(session) -> AekoSession:
     )
 
 
+def build_metric_sink(database):
+    """The function `shared/event_tracking.py` calls to persist one request.
+
+    It lives here because this is the only file that may know both halves:
+    `shared` holds an `Event` and no domain, and the domain holds a `Metric`
+    and no middleware. The translation between the two is composition, which
+    is what this module is.
+    """
+
+    service = HubMetricsService(HubMetricsRepository(database))
+
+    def sink(event: Event) -> None:
+        service.add_metric(
+            Metric(
+                # `_id`, because that is what the caller was already
+                # answered with in the `x-request-id` header: the row has to be
+                # findable under exactly the value they were handed.
+                id=event.id_request,
+                latency=event.latency,
+                response_status=event.response_status,
+                endpoint=event.endpoint,
+            )
+        )
+
+    return sink
+
+
 def build_inventory_analyzer() -> AekoInventoryAnalyzer:
     """A fresh analyzer per report: `set_context()` is instance state."""
     return AekoInventoryAnalyzer()
@@ -211,9 +257,21 @@ def build_inventory_analyzer() -> AekoInventoryAnalyzer:
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     global mongo_client, db
+
+    # Before the first request, and after uvicorn has configured its own
+    # logging: `RequestLogMiddleware` closes every request with a block
+    # that says what the request did, and uvicorn's access line would
+    # only repeat its first sentence.
+    silence_uvicorn_access_log()
+
     mongo_client = MongoClient(MONGO_URI)
     db = mongo_client[DB_NAME]
     app.state.db = db
+
+    # Event tracking starts here and nowhere earlier: the middleware has been
+    # answering requests since import, but it has nothing to write to until
+    # this database handle exists.
+    set_event_sink(build_metric_sink(db))
 
     # Process-wide setup: exactly once, before the first request. Both calls
     # rebuild every agent, so doing either per request would throw away warm
@@ -234,15 +292,22 @@ async def lifespan(app: FastAPI):
     app.state._state["aeko_inventory_analyzer_factory"] = build_inventory_analyzer
 
     try:
-        db.command("ping")
+        # The first database access of the process, and the one that decides
+        # whether there is an application at all — so it is logged like every
+        # other one instead of being narrated by a `print`.
+        with operation(Module.DATABASE, "mongo.ping"):
+            db.command("ping")
     except Exception as exc:
-        print(f"MongoDB error: {type(exc).__name__}: {exc}")
         raise RuntimeError(f"Failed to connect to MongoDB: {exc}") from exc
 
     if MCP_WARM_UP.strip().lower() not in {"false", "0", "no"}:
         _warm_up_mcp_sessions()
 
     yield
+
+    # Before the client below is closed: a sink left registered would hand the
+    # next request a database that is no longer there.
+    set_event_sink(None)
 
     # Each open session owns a server process — the Chroma one holding a
     # gigabyte of model weights. Closing them here is what keeps them from
@@ -265,15 +330,28 @@ OPENAPI_TAGS = [
         "name": "Reports",
         "description": "Endpoints for generating AI-assisted reports and improvement plans.",
     },
+    {
+        "name": "Metrics",
+        "description": "Endpoints for reading the event tracking base behind the observability dashboard.",
+    },
 ]
 
 app = FastAPI(
     lifespan=lifespan,
     title="Aether AI Gateway",
     version="1.0.0",
-    description="HTTP API for user, session, and report workflows in the Aether core gateway.",
+    description=(
+        "HTTP API for user, session, and report workflows in the Aether core gateway. "
+        "Every response carries an X-Request-Id header: the identifier of that request "
+        "in the hub_metrics base."
+    ),
     openapi_tags=OPENAPI_TAGS,
 )
+# Outermost of this application's own middleware, so the block covers the
+# whole request rather than what is left of it after the others.
+app.add_middleware(RequestLogMiddleware)
+
 app.include_router(user_router)
 app.include_router(session_router)
 app.include_router(improvement_plan_router)
+app.include_router(hub_metrics_router)

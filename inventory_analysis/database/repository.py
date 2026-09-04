@@ -2,12 +2,14 @@ import boto3
 import requests
 
 from inventory_analysis.inventory_analysis import IRepository
+from shared import Module, logged
 
 
 s3_client = boto3.client("s3")
 
 
 class Repository(IRepository):
+    @logged(Module.DATABASE, "inventory.get_excel_bytes")
     def get_excel_bytes(self, s3: str) -> bytes:
         try:
             bucket, key = _normalize_s3_reference(s3)
@@ -19,6 +21,7 @@ class Repository(IRepository):
         except Exception as e:
             raise RuntimeError(f"Error fetching inventory file from S3: {e}")
 
+    @logged(Module.INTEGRATION, "inventory.get_external_inventory_context")
     def get_external_inventory_context(self, id_external_inventory_4context: int) -> dict:
         try:
             response = requests.get(

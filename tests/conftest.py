@@ -24,6 +24,7 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
+from shared import event_tracking
 from tests import fake_aeko
 
 sys.modules.setdefault("aeko", fake_aeko)
@@ -102,6 +103,18 @@ class FakeMongoClient:
 
     def close(self):
         self.closed = True
+
+
+@pytest.fixture(autouse=True)
+def no_event_sink():
+    """Event tracking is process-wide too; no test may inherit another's sink.
+
+    A leaked one would write a metric — and therefore an extra operation — into
+    every request block the rest of the suite asserts on.
+    """
+    event_tracking.set_event_sink(None)
+    yield
+    event_tracking.set_event_sink(None)
 
 
 @pytest.fixture(autouse=True)

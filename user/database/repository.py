@@ -1,3 +1,4 @@
+from shared import Module, logged
 from user.database import query as q
 from user.entity import User, UserMemory
 from user.user import IRepository
@@ -6,6 +7,7 @@ class Repository(IRepository):
     def __init__(self, db):
         self.db = db
 
+    @logged(Module.DATABASE, "user.get_user")
     def get_user(self, id_external_user) -> User:
         try:
             user_data = self.db.user.find_one(q.get_user_query_filter(id_external_user))
@@ -17,6 +19,7 @@ class Repository(IRepository):
         except Exception as e:
             raise RuntimeError(f"Error fetching user from database: {e}")
 
+    @logged(Module.DATABASE, "user.get_user_by_id")
     def get_user_by_id(self, id_user: str) -> User:
         try:
             query, projection = q.get_user_query(id_user)
@@ -27,6 +30,7 @@ class Repository(IRepository):
         except Exception as e:
             raise RuntimeError(f"Error fetching user by id from database: {e}")
 
+    @logged(Module.DATABASE, "user.get_user_memories")
     def get_user_memories(self, id_user: str) -> list[UserMemory]:
         try:
             memories_data = self.db.user_memory.find(q.get_user_memories_query(id_user))
@@ -43,6 +47,7 @@ class Repository(IRepository):
         except Exception as e:
             raise RuntimeError(f"Error fetching user memories from database: {e}")
 
+    @logged(Module.DATABASE, "user.create_user_memory")
     def create_user_memory(self, user_memory: UserMemory):
         try:
             memory_data = q.create_user_memory_query(user_memory)

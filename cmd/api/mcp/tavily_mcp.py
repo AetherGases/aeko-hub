@@ -25,6 +25,8 @@ from langchain_mcp_adapters.client import MultiServerMCPClient
 
 from .mcp_session import PersistentMCPSession
 
+from shared import Module, logged
+
 TAVILY_SEARCH_TOOL_NAME = "tavily_search"
 TAVILY_RESEARCH_TOOL_NAME = "tavily_research"
 TAVILY_MAP_TOOL_NAME = "tavily_map"
@@ -91,14 +93,17 @@ def _call_tavily_tool(tool_name: str, **kwargs: Any) -> Any:
     return TAVILY_SESSION.call_tool(tool_name, **kwargs)
 
 
+@logged(Module.TOOL, "tavily_search")
 def _tavily_search(query: str) -> Any:
     return _call_tavily_tool(TAVILY_SEARCH_TOOL_NAME, query=query)
 
 
+@logged(Module.TOOL, "tavily_research")
 def _tavily_research(query: str) -> Any:
     return _call_tavily_tool(TAVILY_RESEARCH_TOOL_NAME, query=query)
 
 
+@logged(Module.TOOL, "tavily_map")
 def _tavily_map_aether_site(_input: str = "") -> Any:
     """Maps only the Aether website — the URL is fixed via env, not agent input."""
 

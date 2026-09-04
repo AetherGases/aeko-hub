@@ -34,6 +34,8 @@ from langchain_core.tools import BaseTool
 from langchain_mcp_adapters.client import MultiServerMCPClient
 from langchain_mcp_adapters.tools import load_mcp_tools
 
+from shared import Module, log_success, operation
+
 # Generous on purpose: a cold server still has to import torch and load model
 # weights, and a timeout firing during a legitimate start-up would look exactly
 # like the bug this module exists to remove.
@@ -105,6 +107,7 @@ class PersistentMCPSession:
             self._loop = self._thread = self._tools = self._closing = self._keeper = None
 
         if loop is None:
+            # Never opened, or already closed: nothing died, so nothing to say.
             return
 
         if closing is not None:
@@ -120,6 +123,10 @@ class PersistentMCPSession:
 
         loop.call_soon_threadsafe(loop.stop)
 
+        # Paired with the `.start` line above: between the two, a server
+        # process existed, and every tool call in between ran against it.
+        log_success(Module.MCP, f"{self._server_name}.close ended the session")
+
     # -- calling -----------------------------------------------------------
     def call_tool(self, tool_name: str, **kwargs: Any) -> Any:
         """Run one MCP tool over the shared session, synchronously.
@@ -129,20 +136,24 @@ class PersistentMCPSession:
         whose pipe is already closed.
         """
 
-        last_error: Exception | None = None
-        for attempt in (1, 2):
-            tool = self._resolve_tool(tool_name)
-            try:
-                return self._run(tool.ainvoke(kwargs))
-            except MCPSessionError:
-                raise
-            except Exception as exc:
-                last_error = exc
-                self.close()
+        # One line per tool call, whichever attempt answers: the retry is an
+        # implementation detail of this method, and a reader counting how long
+        # an agent's turn took wants the call, not the attempts.
+        with operation(Module.MCP, f"{self._server_name}.{tool_name}"):
+            last_error: Exception | None = None
+            for attempt in (1, 2):
+                tool = self._resolve_tool(tool_name)
+                try:
+                    return self._run(tool.ainvoke(kwargs))
+                except MCPSessionError:
+                    raise
+                except Exception as exc:
+                    last_error = exc
+                    self.close()
 
-        raise MCPSessionError(
-            f"'{tool_name}' failed on the {self._server_name} MCP server: {last_error}"
-        ) from last_error
+            raise MCPSessionError(
+                f"'{tool_name}' failed on the {self._server_name} MCP server: {last_error}"
+            ) from last_error
 
     def _run(self, coroutine: Any) -> Any:
         loop = self._loop
@@ -179,33 +190,36 @@ class PersistentMCPSession:
     def _ensure_started(self) -> dict[str, BaseTool]:
         with self._lock:
             if self._tools is not None:
+                # A warm session is not an event: only the cold start below is
+                # logged, so a `.start` line always means a server was spawned.
                 return self._tools
 
-            client = self._build_client()
-            loop = asyncio.new_event_loop()
-            thread = threading.Thread(
-                target=self._run_loop,
-                args=(loop,),
-                name=f"mcp-{self._server_name}",
-                daemon=True,
-            )
-            thread.start()
+            with operation(Module.MCP, f"{self._server_name}.start"):
+                client = self._build_client()
+                loop = asyncio.new_event_loop()
+                thread = threading.Thread(
+                    target=self._run_loop,
+                    args=(loop,),
+                    name=f"mcp-{self._server_name}",
+                    daemon=True,
+                )
+                thread.start()
 
-            ready: concurrent.futures.Future = concurrent.futures.Future()
-            keeper = asyncio.run_coroutine_threadsafe(self._keep_open(client, ready), loop)
+                ready: concurrent.futures.Future = concurrent.futures.Future()
+                keeper = asyncio.run_coroutine_threadsafe(self._keep_open(client, ready), loop)
 
-            try:
-                tools = ready.result(timeout=self._startup_timeout)
-            except Exception as exc:
-                keeper.cancel()
-                loop.call_soon_threadsafe(loop.stop)
-                raise MCPSessionError(
-                    f"could not open a session with the {self._server_name} "
-                    f"MCP server: {exc}"
-                ) from exc
+                try:
+                    tools = ready.result(timeout=self._startup_timeout)
+                except Exception as exc:
+                    keeper.cancel()
+                    loop.call_soon_threadsafe(loop.stop)
+                    raise MCPSessionError(
+                        f"could not open a session with the {self._server_name} "
+                        f"MCP server: {exc}"
+                    ) from exc
 
-            self._loop, self._thread, self._tools, self._keeper = loop, thread, tools, keeper
-            return tools
+                self._loop, self._thread, self._tools, self._keeper = loop, thread, tools, keeper
+                return tools
 
     @staticmethod
     def _run_loop(loop: asyncio.AbstractEventLoop) -> None:

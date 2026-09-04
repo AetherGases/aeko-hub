@@ -56,6 +56,8 @@ from typing import Any
 
 from langchain_core.tools import Tool
 
+from shared import Module, logged
+
 # The window every proposal is judged over, in months. Fixed rather than a
 # parameter: an ROI is a comparison, and it stops being one when two answers
 # were calculated over different horizons.
@@ -303,6 +305,7 @@ def _payback_month(present_values: list[int | float], capex: int | float) -> int
     return ROI_PAYBACK_NOT_RECOVERED
 
 
+@logged(Module.TOOL, "calculate_roi")
 def _calculate_roi(request_input: str | dict[str, Any] | None = "") -> dict[str, Any]:
     """`func` of `calculate_roi`: what the project returns on what it costs."""
 
@@ -325,6 +328,7 @@ def _calculate_roi(request_input: str | dict[str, Any] | None = "") -> dict[str,
     }
 
 
+@logged(Module.TOOL, "calculate_payback")
 def _calculate_payback(
     request_input: str | dict[str, Any] | None = "",
 ) -> dict[str, Any]:

@@ -38,6 +38,8 @@ from typing import Any
 import requests
 from langchain_core.tools import Tool
 
+from shared import Module, logged
+
 CLIMATIQ_API_KEY_ENV_VAR = "CLIMATIQ_API_KEY"
 
 # Versioned in the path by Climatiq itself, which is what makes pinning a
@@ -270,6 +272,7 @@ def _parse_estimate_request(request_input: str | dict[str, Any] | None) -> dict[
     return payload
 
 
+@logged(Module.INTEGRATION, "climatiq_search")
 def _climatiq_search(query: str | None = "") -> Any:
     """The emission factors Climatiq has for a material, without calculating."""
 
@@ -284,6 +287,7 @@ def _climatiq_search(query: str | None = "") -> Any:
     )
 
 
+@logged(Module.INTEGRATION, "climatiq_estimate")
 def _climatiq_estimate(request_input: str | dict[str, Any] | None = "") -> Any:
     """Emissions for one activity, from an emission factor the agent chose."""
 

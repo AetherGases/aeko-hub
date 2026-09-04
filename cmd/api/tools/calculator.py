@@ -39,6 +39,8 @@ import operator
 
 from langchain_core.tools import Tool
 
+from shared import Module, logged
+
 # The whole grammar. `**` is included because emission maths uses it (GWP over
 # a horizon, compounding), and bounded below.
 CALCULATOR_OPERATORS = {
@@ -263,6 +265,7 @@ def _format_result(value: int | float) -> str:
     return repr(value)
 
 
+@logged(Module.TOOL, "calculator")
 def _calculate(expression: str | None = "") -> str:
     """The tool's `func`: text in, one number out.
 

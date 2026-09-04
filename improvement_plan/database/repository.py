@@ -1,12 +1,14 @@
 from improvement_plan.database import query as q
 from improvement_plan.entity import ImprovementPlan
 from improvement_plan.improvement_plan import IRepository
+from shared import Module, logged
 
 
 class Repository(IRepository):
 	def __init__(self, db):
 		self.db = db
 
+	@logged(Module.DATABASE, "improvement_plan.get_by_id_external_inventory")
 	def get_by_id_external_inventory(self, id_external_inventory) -> ImprovementPlan:
 		try:
 			query, projection = q.get_by_id_external_inventory_query(id_external_inventory)
@@ -19,6 +21,7 @@ class Repository(IRepository):
 		except Exception as e:
 			raise RuntimeError(f"Error fetching improvement plan from database: {e}")
 
+	@logged(Module.DATABASE, "improvement_plan.create")
 	def create(self, improvement_plan: ImprovementPlan) -> ImprovementPlan:
 		try:
 			improvement_plan_data = q.create_improvement_plan_query(improvement_plan)

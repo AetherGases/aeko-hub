@@ -27,6 +27,8 @@ from langchain_mcp_adapters.client import MultiServerMCPClient
 
 from .mcp_session import PersistentMCPSession
 
+from shared import Module, logged
+
 QUERY_GASES_INFO_TOOL_NAME = "query_gases_info"
 
 CHROMA_TENANT_ENV_VAR = "CHROMA_TENANT"
@@ -170,6 +172,7 @@ def _parse_query(query: str | list[str] | None) -> list[str]:
     return texts
 
 
+@logged(Module.TOOL, "query_gases_info")
 def _query_gases_info(query: str | list[str] | None = "") -> Any:
     """Semantic search over `gases-info`.
 

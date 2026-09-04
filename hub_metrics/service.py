@@ -1,0 +1,18 @@
+from hub_metrics.entity import Metric
+from hub_metrics.hub_metrics import IService
+
+class Service(IService):
+    def __init__(self, repository):
+        self.repository = repository
+
+    def add_metric(self, metric: Metric) -> Metric:
+        try:
+            return self.repository.create_metric(metric)
+        except Exception as e:
+            raise RuntimeError(f"Error adding metric: {e}")
+
+    def get_all_metrics(self) -> list[Metric]:
+        try:
+            return self.repository.get_all_metrics()
+        except Exception as e:
+            raise RuntimeError(f"Error retrieving metrics: {e}")

@@ -2,7 +2,7 @@ openapi: 3.0.3
 info:
   title: Aether AI Gateway
   version: 1.0.0
-  description: HTTP API for user, session, and improvement plan report workflows in the Aether core gateway.
+  description: 'HTTP API for user, session, and improvement plan report workflows in the Aether core gateway. Every response carries an X-Request-Id header: the identifier of that request in the hub_metrics base.'
 servers:
   - url: /
 tags:
@@ -12,6 +12,8 @@ tags:
     description: Endpoints for listing sessions, reading message history, and sending AI messages.
   - name: Reports
     description: Endpoints for generating AI-assisted improvement plan reports and persisting output artifacts.
+  - name: Metrics
+    description: Endpoints for reading the event tracking base behind the observability dashboard.
 paths:
   /aether-api/v1/ai/user/{id_external_user}:
     get:
@@ -306,6 +308,43 @@ paths:
                 $ref: '#/components/schemas/ErrorResponse'
               example:
                 detail: 'Error processing report: ...'
+  /aether-api/v1/ai/hub-metrics:
+    get:
+      tags:
+        - Metrics
+      summary: List every tracked request
+      description: 'Returns the whole event tracking base: one row per request served by the gateway, as the observability dashboard reads it.'
+      operationId: listHubMetrics
+      responses:
+        '200':
+          description: Metrics found.
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/MetricResponseData'
+              example:
+                - id: 65a8b3d6c0f8e1d7f4b2c0aa
+                  latency: 12.4ms
+                  response_status: 200
+                  endpoint: /aether-api/v1/ai/user/{id_external_user}
+        '503':
+          description: Database connection is unavailable.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+              example:
+                detail: Database is not initialized
+        '500':
+          description: Unexpected server error.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+              example:
+                detail: 'Error retrieving metrics: ...'
 components:
   schemas:
     ErrorResponse:
@@ -401,3 +440,27 @@ components:
       required:
         - s3_path
         - file_name
+    MetricResponseData:
+      type: object
+      properties:
+        id:
+          type: string
+          description: Identifier of the tracked request, answered to its caller in the X-Request-Id header.
+          example: 65a8b3d6c0f8e1d7f4b2c0aa
+        latency:
+          type: string
+          description: How long the request took, in milliseconds.
+          example: 12.4ms
+        response_status:
+          type: integer
+          description: HTTP status the request answered with.
+          example: 200
+        endpoint:
+          type: string
+          description: Route template the request matched.
+          example: /aether-api/v1/ai/user/{id_external_user}
+      required:
+        - id
+        - latency
+        - response_status
+        - endpoint
