@@ -105,9 +105,6 @@ def seeded_repositories():
         input="Summarize this session.",
         output="Here is the summary.",
         submitted_at=SUBMITTED_AT,
-        llm="fake-llm",
-        input_tokens=10,
-        output_tokens=20,
     )
     memories = [
         UserMemory(
@@ -494,7 +491,7 @@ def test_send_message_hands_the_session_document_to_the_sdk(live_app, fake_sdk):
 
     send(client, id_session="s1", input="What is scope 3?", id_user="u1")
 
-    message, session = fake_sdk.AekoMessenger.instances[-1].sent[-1]
+    message, session, _ = fake_sdk.AekoMessenger.instances[-1].sent[-1]
     assert message == "What is scope 3?"
     assert session.id == "s1"
     assert session.id_user == "u1"
@@ -559,3 +556,72 @@ def test_report_route_is_registered(live_app):
     )
 
     assert response.status_code != 404
+
+
+# ---------------------------------------------------------------------------
+# What the run cost, end to end
+# ---------------------------------------------------------------------------
+def stored_metrics(api_main):
+    return list(api_main.db["aeko_metrics"].documents)
+
+
+def test_send_message_records_what_the_run_cost(live_app):
+    client, api_main, _, _ = live_app
+
+    send(client, id_session="s1", input="What is scope 3?", id_user="u1")
+
+    (document,) = stored_metrics(api_main)
+    assert document["flow"] == "conversational"
+    assert document["error_description"] is None
+    assert document["latency"] > 0
+    assert [agent["name"] for agent in document["used_agents"]] == ["FAQ"]
+
+
+def test_the_recorded_run_names_the_request_its_caller_was_answered_with(live_app):
+    """The one thing that makes the two bases readable together: the SDK is
+    handed the identifier the gateway already minted, not one of its own."""
+    client, api_main, _, _ = live_app
+
+    response = send(client, id_session="s1", input="What is scope 3?", id_user="u1")
+
+    (document,) = stored_metrics(api_main)
+    assert document["id_request"] == response.headers["x-request-id"]
+
+
+def test_the_two_metric_bases_name_the_same_request(live_app):
+    client, api_main, _, _ = live_app
+
+    send(client, id_session="s1", input="What is scope 3?", id_user="u1")
+
+    (request_row,) = list(api_main.db["hub_metrics"].documents)
+    (run_row,) = stored_metrics(api_main)
+    assert str(request_row["_id"]) == run_row["id_request"]
+
+
+def test_a_turn_the_guardrail_rejected_is_still_recorded(live_app, fake_sdk):
+    client, api_main, _, _ = live_app
+    fake_sdk.AekoMessenger.next_approved = False
+
+    response = send(client, id_session="s1", input="hi", id_user="u1")
+
+    assert response.status_code == 502
+    (document,) = stored_metrics(api_main)
+    assert document["error_description"] == "no answer approved by the output guardrail"
+
+
+def test_a_request_that_never_reached_the_sdk_records_no_run(live_app):
+    client, api_main, _, _ = live_app
+
+    client.get("/aether-api/v1/ai/sessions/user/u1")
+
+    assert stored_metrics(api_main) == []
+
+
+def test_the_stored_turn_no_longer_carries_what_it_cost(live_app):
+    """3.1 reduced `session.messages` to the exchange itself."""
+    client, _, _, session_repository = live_app
+
+    send(client, id_session="s1", input="What is scope 3?", id_user="u1")
+
+    turn = session_repository.get_session_messages("s1")[-1]
+    assert set(vars(turn)) == {"input", "output", "submitted_at"}

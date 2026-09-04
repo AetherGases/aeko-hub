@@ -55,9 +55,11 @@ from shared.event_tracking import (
     CRASHED_STATUS,
     Event,
     answer_with_id_request,
+    bind_id_request,
     endpoint_of,
     new_id_request,
     record_event,
+    unbind_id_request,
 )
 from shared.logger import (
     BLUE,
@@ -283,6 +285,9 @@ class RequestLogMiddleware:
         # Minted before the request runs, so a row exists for it whatever
         # happens underneath — including an exception that never answers.
         id_request = new_id_request()
+        # And bound for as long as it lasts, so the SDK can be handed the very
+        # identifier this request is tracked under instead of inventing one.
+        id_token = bind_id_request(id_request)
 
         async def send_wrapper(message: dict) -> None:
             if message["type"] == "http.response.start":
@@ -314,5 +319,6 @@ class RequestLogMiddleware:
         else:
             self._close(scope, method, path, status["code"], started, records, id_request)
         finally:
+            unbind_id_request(id_token)
             _records.reset(token)
 

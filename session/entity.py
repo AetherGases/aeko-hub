@@ -2,20 +2,23 @@ from datetime import datetime
 
 
 class Message:
+    """One exchanged turn: what was asked, what was answered, and when.
+
+    What the turn *cost* used to live here too. Since SDK 3.1 it does not: the
+    model that served it and the tokens it burned are reported per agent
+    invocation on the request's own tracking, which the `aeko_metrics` domain
+    stores. Keeping a rolled-up copy on the turn as well would be two records
+    of one fact, free to drift apart and impossible to tell apart once they had.
+    """
+
     input: str
     output: str
     submitted_at: datetime
-    llm: str
-    input_tokens: int
-    output_tokens: int
 
-    def __init__(self, input: str, output: str, submitted_at: datetime, llm: str, input_tokens: int, output_tokens: int):
+    def __init__(self, input: str, output: str, submitted_at: datetime):
         self.input = input
         self.output = output
         self.submitted_at = submitted_at
-        self.llm = llm
-        self.input_tokens = input_tokens
-        self.output_tokens = output_tokens
 
 
 class Session:

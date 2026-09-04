@@ -35,10 +35,14 @@ def get_session_messages_query(id_session: str) -> tuple[dict, dict]:
         "messages.submitted_at": 1,
     }
 
-def get_save_message_query(input: str, output: str, llm: str, input_tokens: int, output_tokens: int, submitted_at: datetime | None = None) -> dict:
+def get_save_message_query(input: str, output: str, submitted_at: datetime | None = None) -> dict:
     # The turn is created by the SDK, which is the only thing that knows when it
     # was answered, so its own `submitted_at` is what gets stored — and what the
     # session's `updated_at` is bumped to.
+    #
+    # Three fields, since SDK 3.1: what the turn cost is written to
+    # `aeko_metrics` instead, per agent invocation, which is a finer account of
+    # the same thing than the rolled-up copy this used to push.
     now = submitted_at or datetime.utcnow()
 
     query = {
@@ -46,10 +50,7 @@ def get_save_message_query(input: str, output: str, llm: str, input_tokens: int,
             "messages": {
                 "input": input,
                 "output": output,
-                "submitted_at": now,
-                "llm": llm,
-                "input_tokens": input_tokens,
-                "output_tokens": output_tokens
+                "submitted_at": now
             }
         },
         "$set": {

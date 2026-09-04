@@ -25,7 +25,14 @@ why tracking costs a request nothing:
   one row on a dashboard; `/user/12345` and `/user/999` are two rows that say
   nothing, and a path with an identifier in it has no upper bound.
 
-**The sink is injected.** `shared` is the base every package imports and it
+**The identifier is readable while the request runs.** It is minted here, at
+the top of the request, and the SDK needs the very same value: a run it reports
+under an identifier of its own invention could never be lined up with the
+request that made it. So it is bound to the context for as long as the request
+lasts and read back through `current_id_request()` — nothing in between has to
+carry it down, which is what keeps the handlers' signatures out of it.
+
+**The sinks are injected.** `shared` is the base every package imports and it
 imports none of them back, so this module has no idea `hub_metrics` exists: it
 holds a function, and `cmd/api/main.py` — the composition root, and the only
 place where a database handle exists — registers the one that writes. Without
@@ -36,12 +43,21 @@ The one thing it does know about the storage is the shape of the identifier —
 `bson.ObjectId`, because the header must carry the row's `_id` and the header
 is written first. That is a dependency on the driver, not on a domain.
 
+There are two of them, because there are two accounts of one request. The first
+is the gateway's own — how long it took, what it answered — and `hub_metrics`
+stores it. The second is what the SDK reports about the run inside it, which
+only exists for the requests that made one, and `aeko_metrics` stores that. They
+are separate sinks rather than one, because they are written at different
+moments by different callers: the middleware closes every request, while only a
+service that called the SDK has a run to report.
+
 Nothing here may raise into a request. A row that cannot be written is a row
 lost and a red line explaining it; it is never a request the user loses.
 """
 
 from __future__ import annotations
 
+import contextvars
 from dataclasses import dataclass
 from typing import Any, Callable
 
@@ -79,8 +95,50 @@ class Event:
     endpoint: str
 
 
+# The identifier of the request being served in this context. Empty outside
+# any request — start-up, a warm-up thread, a script driving a service
+# directly — which is exactly what a run nobody is tracking should report.
+#
+# A ContextVar rather than a module global for the reason the request block
+# uses one: two requests served by the same worker must never read each other's
+# identifier. It is set by the middleware in the request's own task, so the
+# operations underneath — including those handed to a worker thread, which
+# `run_in_threadpool` copies the context into — read the one they belong to.
+_id_request: contextvars.ContextVar[str] = contextvars.ContextVar(
+    "aeko_id_request", default=""
+)
+
+
+def bind_id_request(id_request: str) -> contextvars.Token:
+    """Make `id_request` the identifier this context's work is tracked under."""
+
+    return _id_request.set(id_request)
+
+
+def unbind_id_request(token: contextvars.Token) -> None:
+    """Restore whatever identifier was current before `bind_id_request`."""
+
+    _id_request.reset(token)
+
+
+def current_id_request() -> str:
+    """The identifier of the request being served, or empty outside one.
+
+    This is what the SDK is handed at every call: it reads no database and
+    cannot derive one, and a run reported under an invented identifier is a run
+    nobody can line up with the request that paid for it.
+    """
+
+    return _id_request.get()
+
+
 # `None` means nothing is tracking, which is the state every process starts in.
 _sink: Callable[[Event], Any] | None = None
+
+# The second one: what the SDK reported about the run inside a request. Only
+# the requests that called the SDK have one, and it arrives as the SDK's own
+# object — read by the composition root, never by anything here.
+_aeko_sink: Callable[[Any], Any] | None = None
 
 
 def set_event_sink(sink: Callable[[Event], Any] | None) -> None:
@@ -92,6 +150,50 @@ def set_event_sink(sink: Callable[[Event], Any] | None) -> None:
 
     global _sink
     _sink = sink
+
+
+def set_aeko_metrics_sink(sink: Callable[[Any], Any] | None) -> None:
+    """Register — or, with `None`, take back off — the function that persists
+    what the SDK reported about a run.
+
+    A second registration rather than a second job for the one above: the two
+    rows are written at different moments, by different callers, about
+    different things.
+    """
+
+    global _aeko_sink
+    _aeko_sink = sink
+
+
+def record_aeko_metrics(metrics: Any) -> bool:
+    """Hand the SDK's account of one run to the sink, if there is one.
+
+    `metrics` is whatever the SDK handed back — this module never reads a field
+    of it, which is what lets `shared` stay as ignorant of the SDK as it is of
+    the domains. `None` is normal and records nothing: an error raised before a
+    run started carries no tracking at all.
+
+    Answers whether it was taken, and swallows whatever the sink raises. A row
+    describing a run is never worth the run itself.
+    """
+
+    if metrics is None:
+        return False
+
+    sink = _aeko_sink
+    if sink is None:
+        return False
+
+    try:
+        sink(metrics)
+    except Exception as exc:
+        log_failure(
+            Module.DATABASE,
+            f"aeko_metrics.record gave up: {type(exc).__name__}: {exc}",
+        )
+        return False
+
+    return True
 
 
 def new_id_request() -> str:

@@ -255,9 +255,6 @@ def test_save_message_pushes_the_message_into_the_session():
         input="What is scope 3?",
         output="Indirect emissions.",
         submitted_at=SUBMITTED_AT,
-        llm="fake-llm",
-        input_tokens=10,
-        output_tokens=20,
     )
 
     repository.save_message(ID_SESSION, message)
@@ -266,14 +263,27 @@ def test_save_message_pushes_the_message_into_the_session():
     assert {"_id": ObjectId(ID_SESSION)} in query["$or"]
     assert update["$push"]["messages"]["input"] == "What is scope 3?"
     assert update["$push"]["messages"]["output"] == "Indirect emissions."
-    assert update["$push"]["messages"]["llm"] == "fake-llm"
     assert update["$push"]["messages"]["submitted_at"] == SUBMITTED_AT
     assert "ouput" not in update["$push"]["messages"]
 
 
+def test_a_pushed_turn_is_only_the_exchange_and_its_time():
+    """3.1 moved what a turn cost onto the request's `aeko_metrics`; the three
+    fields it used to carry are no longer written here."""
+    collection = StubCollection()
+    repository, _ = build_repository(collection)
+
+    repository.save_message(
+        ID_SESSION, Message(input="a", output="b", submitted_at=SUBMITTED_AT)
+    )
+
+    _, update = collection.call_args("update_one")[0]
+    assert set(update["$push"]["messages"]) == {"input", "output", "submitted_at"}
+
+
 def test_save_message_wraps_database_failures_in_runtime_error():
     repository, _ = build_repository(StubCollection(error=OSError("boom")))
-    message = Message(input="a", output="b", submitted_at=SUBMITTED_AT, llm="l", input_tokens=1, output_tokens=2)
+    message = Message(input="a", output="b", submitted_at=SUBMITTED_AT)
 
     with pytest.raises(RuntimeError, match="boom"):
         repository.save_message(ID_SESSION, message)
@@ -303,14 +313,17 @@ def test_update_name_wraps_database_failures_in_runtime_error():
 def test_message_from_data_reads_the_stored_field_names():
     message = message_from_data(MESSAGE_DOCUMENT)
 
-    assert (message.input, message.output, message.llm) == ("Summarize this session.", "Here is the summary.", "")
-    assert (message.input_tokens, message.output_tokens) == (0, 0)
+    assert (message.input, message.output) == ("Summarize this session.", "Here is the summary.")
+    assert message.submitted_at == SUBMITTED_AT
 
 
-def test_message_from_data_reads_the_optional_llm_and_token_fields():
+def test_message_from_data_ignores_what_a_turn_used_to_carry():
+    """Documents written before 3.1 still hold `llm` and the token counts. They
+    are not read back: the cost of a run lives in `aeko_metrics` now, and a
+    turn that quoted its own would be a second account of it."""
     message = message_from_data({**MESSAGE_DOCUMENT, "llm": "m", "input_tokens": 1, "output_tokens": 2})
 
-    assert (message.llm, message.input_tokens, message.output_tokens) == ("m", 1, 2)
+    assert set(vars(message)) == {"input", "output", "submitted_at"}
 
 
 def test_message_from_data_ignores_the_response_field_names():
@@ -410,18 +423,17 @@ def test_get_session_messages_count_query_projects_the_size():
 
 def test_get_save_message_query_stores_the_turns_own_timestamp():
     """The SDK stamps the turn; the API stores what it was handed."""
-    update = q.get_save_message_query("in", "out", "llm", 1, 2, SUBMITTED_AT)
+    update = q.get_save_message_query("in", "out", SUBMITTED_AT)
 
     assert update["$push"]["messages"]["submitted_at"] == SUBMITTED_AT
     assert update["$set"]["updated_at"] == SUBMITTED_AT
 
 
 def test_get_save_message_query_pushes_and_timestamps():
-    update = q.get_save_message_query("in", "out", "llm", 1, 2)
+    update = q.get_save_message_query("in", "out")
 
     assert update["$push"]["messages"]["input"] == "in"
     assert update["$push"]["messages"]["output"] == "out"
-    assert update["$push"]["messages"]["output_tokens"] == 2
     assert "ouput" not in update["$push"]["messages"]
     assert update["$set"]["updated_at"] == update["$push"]["messages"]["submitted_at"]
 

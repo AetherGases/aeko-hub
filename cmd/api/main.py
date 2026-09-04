@@ -20,9 +20,13 @@ from cmd.api.mcp.tavily_mcp import (
 )
 from cmd.api.tools.calculator import get_calculator_tools
 from cmd.api.tools.finance import get_roi_payback_tools
+from aeko_metrics.database.repository import Repository as AekoMetricsRepository
+from aeko_metrics.entity import AgentMetric, Metric as AekoMetric
+from aeko_metrics.service import Service as AekoMetricsService
 from hub_metrics.database.repository import Repository as HubMetricsRepository
 from hub_metrics.entity import Metric
 from hub_metrics.service import Service as HubMetricsService
+from internal.http.aeko_metrics_handlers import router as aeko_metrics_router
 from internal.http.hub_metrics_handlers import router as hub_metrics_router
 from internal.http.improvement_plan_handlers import router as improvement_plan_router
 from internal.http.session_handlers import router as session_router
@@ -33,6 +37,7 @@ from shared import (
     RequestLogMiddleware,
     log_failure,
     operation,
+    set_aeko_metrics_sink,
     set_event_sink,
     silence_uvicorn_access_log,
 )
@@ -211,9 +216,6 @@ def build_session(session) -> AekoSession:
                 input=message.input,
                 output=message.output,
                 submitted_at=message.submitted_at,
-                llm=message.llm,
-                input_tokens=message.input_tokens,
-                output_tokens=message.output_tokens,
             )
             for message in session.messages
         ],
@@ -249,6 +251,45 @@ def build_metric_sink(database):
     return sink
 
 
+def build_aeko_metrics_sink(database):
+    """The function `shared/event_tracking.py` calls to persist one SDK run.
+
+    Here for the same reason its sibling above is: this is the only file that
+    may know both halves. `shared` holds an `AekoMetrics` it never reads a
+    field of, the domain holds a `Metric` and no SDK, and translating one into
+    the other is composition — which is what this module is.
+    """
+
+    service = AekoMetricsService(AekoMetricsRepository(database))
+
+    def sink(metrics) -> None:
+        service.add_metric(
+            AekoMetric(
+                # The request's identifier as a field, not as the `_id`: the
+                # row `hub_metrics` stores for the same request already owns
+                # that value as its primary key.
+                id_request=metrics.id_request,
+                latency=metrics.latency,
+                error_description=metrics.error_description,
+                flow=metrics.flow,
+                used_agents=[
+                    AgentMetric(
+                        name=agent.name,
+                        input_tokens=agent.input_tokens,
+                        output_tokens=agent.output_tokens,
+                        llm=agent.llm,
+                        used_tools=list(agent.used_tools),
+                    )
+                    # One entry per invocation, in call order — an agent the
+                    # guardrail's retry loop called again is listed again.
+                    for agent in metrics.used_agents
+                ],
+            )
+        )
+
+    return sink
+
+
 def build_inventory_analyzer() -> AekoInventoryAnalyzer:
     """A fresh analyzer per report: `set_context()` is instance state."""
     return AekoInventoryAnalyzer()
@@ -272,6 +313,10 @@ async def lifespan(app: FastAPI):
     # answering requests since import, but it has nothing to write to until
     # this database handle exists.
     set_event_sink(build_metric_sink(db))
+
+    # The other half of the same story: what the SDK reported about the run
+    # inside a request, for the requests that made one.
+    set_aeko_metrics_sink(build_aeko_metrics_sink(db))
 
     # Process-wide setup: exactly once, before the first request. Both calls
     # rebuild every agent, so doing either per request would throw away warm
@@ -308,6 +353,7 @@ async def lifespan(app: FastAPI):
     # Before the client below is closed: a sink left registered would hand the
     # next request a database that is no longer there.
     set_event_sink(None)
+    set_aeko_metrics_sink(None)
 
     # Each open session owns a server process — the Chroma one holding a
     # gigabyte of model weights. Closing them here is what keeps them from
@@ -332,7 +378,7 @@ OPENAPI_TAGS = [
     },
     {
         "name": "Metrics",
-        "description": "Endpoints for reading the event tracking base behind the observability dashboard.",
+        "description": "Endpoints for reading the event tracking bases behind the observability dashboard: what the gateway did with each request, and what the AI run inside it cost.",
     },
 ]
 
@@ -355,3 +401,4 @@ app.include_router(user_router)
 app.include_router(session_router)
 app.include_router(improvement_plan_router)
 app.include_router(hub_metrics_router)
+app.include_router(aeko_metrics_router)

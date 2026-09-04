@@ -242,7 +242,7 @@ def test_send_message_hands_the_real_dtos_to_the_sdk(api_main, configured_sdk):
     )
 
     messenger = configured_sdk.AekoMessenger.instances[-1]
-    _, session = messenger.sent[-1]
+    _, session, _ = messenger.sent[-1]
     assert isinstance(messenger.user, configured_sdk.AekoUser)
     assert isinstance(session, configured_sdk.AekoSession)
     assert session.id == ID_SESSION

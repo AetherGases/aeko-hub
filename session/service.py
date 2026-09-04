@@ -2,6 +2,7 @@ from datetime import datetime
 
 from session.entity import Session, Message
 from session.session import GuardrailRejectedError, IService
+from shared import current_id_request, record_aeko_metrics
 
 from user.user import IRepository as IUserRepository
 
@@ -63,7 +64,18 @@ class Service(IService):
             session.messages = self.repository.get_session_messages(id_session)
 
             messenger = aeko_messenger_factory(user, memories)
-            response = messenger.send_message(input, aeko_session_factory(session))
+
+            # The SDK is handed the identifier this request is already tracked
+            # under, never one invented here: what it reports about the run has
+            # to name the request its caller was answered with, or the two
+            # bases cannot be read together at all.
+            response = _run(
+                messenger, input, aeko_session_factory(session), current_id_request()
+            )
+
+            # Recorded before the guardrail is checked below, so a turn nobody
+            # was answered with still leaves the row that says so.
+            record_aeko_metrics(response.aeko_metrics)
 
             message = _internal_message_from_aeko_message(response.message)
 
@@ -100,15 +112,32 @@ class Service(IService):
         except Exception as e:
             raise RuntimeError(f"Error validating session and user allowance: {e}")
 
+def _run(messenger, input: str, session, id_request: str):
+    """Send the turn, and record what the run cost even when it raised.
+
+    A failed run carries its tracking out on the exception — there is no
+    response left to carry it — and a request that failed is the one worth
+    having recorded. The exception itself is re-raised untouched: this observes
+    the run, it does not change what one does.
+    """
+
+    try:
+        return messenger.send_message(input, session, id_request=id_request)
+    except Exception as exc:
+        record_aeko_metrics(getattr(exc, "aeko_metrics", None))
+        raise
+
+
 def _internal_message_from_aeko_message(message) -> Message:
-    """Map one entry of `AekoMessageResponse.message` onto the stored turn."""
+    """Map one entry of `AekoMessageResponse.message` onto the stored turn.
+
+    Three fields since SDK 3.1: what the turn cost is not the turn's any more,
+    and travels on the response's `aeko_metrics` instead.
+    """
     return Message(
         input=message.input,
         output=message.output,
-        submitted_at=getattr(message, "submitted_at", None) or datetime.utcnow(),
-        llm=message.llm,
-        input_tokens=message.input_tokens,
-        output_tokens=message.output_tokens
+        submitted_at=getattr(message, "submitted_at", None) or datetime.utcnow()
     )
 
 def _session_name_from(input: str) -> str:

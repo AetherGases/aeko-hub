@@ -82,9 +82,6 @@ class Repository(IRepository):
             query = q.get_save_message_query(
                 input=message.input,
                 output=message.output,
-                llm=message.llm,
-                input_tokens=message.input_tokens,
-                output_tokens=message.output_tokens,
                 submitted_at=message.submitted_at
             )
             self.db["session"].update_one(q.get_session_filter(id_session), query)
@@ -99,13 +96,13 @@ class Repository(IRepository):
             raise RuntimeError(f"Error updating session name in database: {e}")
 
 def message_from_data(data: dict) -> Message:
+    """The three fields a turn is, `llm` and the token counts deliberately not
+    read back: documents written before SDK 3.1 still carry them, and reading
+    them would put a second account of a run's cost next to `aeko_metrics`."""
     return Message(
         input=data["input"],
         output=data["output"],
-        submitted_at=data["submitted_at"],
-        llm=data.get("llm", ""),
-        input_tokens=data.get("input_tokens", 0),
-        output_tokens=data.get("output_tokens", 0)
+        submitted_at=data["submitted_at"]
     )
 
 

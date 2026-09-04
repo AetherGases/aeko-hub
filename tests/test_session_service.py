@@ -15,6 +15,7 @@ import pytest
 from session.entity import Message, Session
 from session.service import Service
 from session.session import GuardrailRejectedError, IService
+from shared.event_tracking import bind_id_request, set_aeko_metrics_sink, unbind_id_request
 from user.entity import User, UserMemory
 
 ID_SESSION = "s1"
@@ -25,20 +26,33 @@ USER = User(id=ID_USER, id_external_user=12345, role="analyst", usecase="report_
 
 
 class StubTurn:
-    """One entry of `session.messages`, as `AekoMessageResponse.message`."""
+    """One entry of `session.messages`, as `AekoMessageResponse.message`.
 
-    def __init__(self, input, output, submitted_at=None, llm="fake-llm", input_tokens=1, output_tokens=2):
+    Three fields since 3.1: what the turn cost moved to the request's tracking.
+    """
+
+    def __init__(self, input, output, submitted_at=None):
         self.input = input
         self.output = output
         self.submitted_at = submitted_at
-        self.llm = llm
-        self.input_tokens = input_tokens
-        self.output_tokens = output_tokens
+
+
+class StubMetrics:
+    """Stands in for the `AekoMetrics` the SDK reports a request with."""
+
+    def __init__(self, id_request="", error_description=None, flow="conversational"):
+        self.id_request = id_request
+        self.latency = 12
+        self.error_description = error_description
+        self.flow = flow
+        self.used_agents = []
 
 
 class StubResponse:
-    def __init__(self, message, approved=True, agents_called=None, guardrail_retries=0):
+    def __init__(self, message, aeko_metrics=None, approved=True, agents_called=None,
+                 guardrail_retries=0):
         self.message = message
+        self.aeko_metrics = aeko_metrics or StubMetrics()
         self.id_session = ID_SESSION
         self.id_user = ID_USER
         self.approved = approved
@@ -55,15 +69,23 @@ class StubMessenger:
         self.error = error
         self.sent = []
 
-    def send_message(self, message, session):
-        self.sent.append((message, session))
+    def send_message(self, message, session, *, id_request):
+        self.sent.append((message, session, id_request))
         if self.error is not None:
             raise self.error
         turn = self.turn or StubTurn(
             input=message,
             output=f"echo: {message}" if self.approved else "",
         )
-        return StubResponse(turn, approved=self.approved)
+        output = turn.output
+        return StubResponse(
+            turn,
+            aeko_metrics=StubMetrics(
+                id_request=id_request,
+                error_description=None if output else "no answer approved by the output guardrail",
+            ),
+            approved=self.approved,
+        )
 
 
 class StubMessengerFactory:
@@ -181,6 +203,21 @@ def build_service(**kwargs):
     return Service(repository), repository
 
 
+@pytest.fixture
+def recorded_metrics():
+    """Everything the service hands to the `aeko_metrics` sink, in order."""
+    metrics = []
+    set_aeko_metrics_sink(metrics.append)
+    yield metrics
+    set_aeko_metrics_sink(None)
+
+
+def failing_messengers(error):
+    """A factory whose SDK raises, carrying the run's tracking on the way out."""
+    error.aeko_metrics = StubMetrics(error_description=f"{type(error).__name__}: {error}")
+    return StubMessengerFactory(error=error)
+
+
 def send(service, id_session=ID_SESSION, input="hi", id_user=ID_USER,
          messengers=None, sessions=None, users=None):
     return service.send_message(
@@ -267,20 +304,24 @@ def test_send_message_returns_the_exchange():
     assert isinstance(message, Message)
     assert message.input == "What is scope 3?"
     assert message.output == "echo: What is scope 3?"
-    assert message.llm == "fake-llm"
-    assert (message.input_tokens, message.output_tokens) == (1, 2)
 
 
 def test_send_message_reads_the_turn_out_of_the_response_message():
-    """v2 returns the turn nested under `.message`, not flattened on the response."""
-    messengers = StubMessengerFactory(
-        turn=StubTurn(input="hi", output="ho", llm="fast,slow", input_tokens=7, output_tokens=9)
-    )
+    """The turn is nested under `.message`, not flattened on the response."""
+    messengers = StubMessengerFactory(turn=StubTurn(input="hi", output="ho"))
     service, _ = build_service()
 
     message = send(service, messengers=messengers)
 
-    assert (message.llm, message.input_tokens, message.output_tokens) == ("fast,slow", 7, 9)
+    assert (message.input, message.output) == ("hi", "ho")
+
+
+def test_a_stored_turn_is_only_what_it_said_and_when():
+    """3.1 moved the cost of a turn to the request's tracking; the collection
+    keeps the exchange itself."""
+    message = send(build_service()[0])
+
+    assert set(vars(message)) == {"input", "output", "submitted_at"}
 
 
 def test_send_message_stamps_the_exchange_when_the_turn_carries_no_time():
@@ -322,7 +363,7 @@ def test_send_message_hands_over_the_session_and_the_text():
 
     send(service, input="What is scope 3?", messengers=messengers, sessions=sessions)
 
-    text, document = messengers.last.sent[0]
+    text, document, _ = messengers.last.sent[0]
     assert text == "What is scope 3?"
     assert document is sessions.last
     assert document.id == ID_SESSION
@@ -333,9 +374,6 @@ def test_send_message_rehydrates_the_conversation_into_the_session():
         input="Summarize this session.",
         output="Here is the summary.",
         submitted_at=SUBMITTED_AT,
-        llm="fake-llm",
-        input_tokens=10,
-        output_tokens=20,
     )
     sessions = StubSessionFactory()
     service, _ = build_service(messages={ID_SESSION: [stored]})
@@ -491,3 +529,93 @@ def test_validation_wraps_unexpected_errors():
 
     with pytest.raises(RuntimeError, match="mongo down"):
         service._validate_session_and_user_allowance(ID_SESSION, ID_USER)
+
+
+# ---------------------------------------------------------------------------
+# send_message — the request's event tracking
+# ---------------------------------------------------------------------------
+def test_the_sdk_is_handed_the_identifier_the_request_is_tracked_under():
+    """Not one invented here: the row the SDK reports has to name the same
+    request the gateway already answered in `x-request-id`."""
+    messengers = StubMessengerFactory()
+    service, _ = build_service()
+    token = bind_id_request("65a8b3d6c0f8e1d7f4b2c0aa")
+
+    try:
+        send(service, messengers=messengers)
+    finally:
+        unbind_id_request(token)
+
+    _, _, id_request = messengers.last.sent[0]
+    assert id_request == "65a8b3d6c0f8e1d7f4b2c0aa"
+
+
+def test_a_call_made_outside_a_request_still_reaches_the_sdk():
+    """With no request open there is no identifier, and the SDK takes that."""
+    messengers = StubMessengerFactory()
+    service, _ = build_service()
+
+    send(service, messengers=messengers)
+
+    assert messengers.last.sent[0][2] == ""
+
+
+def test_an_answered_turn_records_what_the_run_cost(recorded_metrics):
+    service, _ = build_service()
+    token = bind_id_request("65a8b3d6c0f8e1d7f4b2c0aa")
+
+    try:
+        send(service)
+    finally:
+        unbind_id_request(token)
+
+    assert [metrics.id_request for metrics in recorded_metrics] == ["65a8b3d6c0f8e1d7f4b2c0aa"]
+    assert recorded_metrics[0].error_description is None
+
+
+def test_a_turn_the_guardrail_rejected_is_recorded_as_the_failure_it_was(recorded_metrics):
+    """It returns normally and delivers nothing, so the tracking is the only
+    place that outcome is written down — and it is written even though the
+    exchange itself is never persisted."""
+    service, repository = build_service()
+
+    with pytest.raises(GuardrailRejectedError):
+        send(service, messengers=StubMessengerFactory(approved=False))
+
+    assert len(recorded_metrics) == 1
+    assert recorded_metrics[0].error_description == "no answer approved by the output guardrail"
+    assert repository.saved == []
+
+
+def test_a_run_that_raised_records_the_tracking_it_carried_out(recorded_metrics):
+    service, _ = build_service()
+
+    with pytest.raises(RuntimeError, match="gemini down"):
+        send(service, messengers=failing_messengers(OSError("gemini down")))
+
+    assert [metrics.error_description for metrics in recorded_metrics] == ["OSError: gemini down"]
+
+
+def test_a_failure_carrying_no_tracking_records_nothing(recorded_metrics):
+    """An error raised before the run started has none to report."""
+    service, _ = build_service()
+
+    with pytest.raises(RuntimeError, match="gemini down"):
+        send(service, messengers=StubMessengerFactory(error=OSError("gemini down")))
+
+    assert recorded_metrics == []
+
+
+def test_a_recording_that_fails_never_takes_the_exchange_down():
+    def explode(metrics):
+        raise RuntimeError("mongo is down")
+
+    service, _ = build_service()
+    set_aeko_metrics_sink(explode)
+
+    try:
+        message = send(service, input="What is scope 3?")
+    finally:
+        set_aeko_metrics_sink(None)
+
+    assert message.output == "echo: What is scope 3?"

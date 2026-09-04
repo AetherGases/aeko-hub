@@ -86,14 +86,7 @@ def SESSION_FACTORY(session):
 
 
 def make_message(input="Summarize this session.", output="Here is the summary."):
-    return Message(
-        input=input,
-        output=output,
-        submitted_at=SUBMITTED_AT,
-        llm="fake-llm",
-        input_tokens=10,
-        output_tokens=20,
-    )
+    return Message(input=input, output=output, submitted_at=SUBMITTED_AT)
 
 
 # ---------------------------------------------------------------------------

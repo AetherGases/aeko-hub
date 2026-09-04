@@ -3,8 +3,8 @@
 Every collaborator is a local double: the S3/HTTP repository, the analyzer
 factory the lifespan publishes, and the two services the plan is filed
 through. What is under test is the protocol the SDK's report flow demands —
-Markdown in, `id_external_inventory` named at the call site, an
-`AekoImprovementPlan` out — and what the API does with the result.
+Markdown in, `id_external_inventory` and `id_request` named at the call site,
+an `AekoAnalysisResponse` out — and what the API does with the result.
 """
 
 import inspect
@@ -16,6 +16,11 @@ from openpyxl import Workbook
 from improvement_plan.entity import ImprovementPlan
 from inventory_analysis.inventory_analysis import IService
 from inventory_analysis.service import Service
+from shared.event_tracking import (
+    bind_id_request,
+    set_aeko_metrics_sink,
+    unbind_id_request,
+)
 from user.entity import UserMemory
 
 ID_USER = "u1"
@@ -44,6 +49,25 @@ class StubPlan:
         self.reasoning = "direct combustion dominates the inventory"
 
 
+class StubMetrics:
+    """Stands in for the `AekoMetrics` the SDK reports an analysis with."""
+
+    def __init__(self, id_request="", error_description=None):
+        self.id_request = id_request
+        self.latency = 12
+        self.error_description = error_description
+        self.flow = "analytical"
+        self.used_agents = []
+
+
+class StubAnalysis:
+    """Stands in for the `AekoAnalysisResponse` 3.x hands back."""
+
+    def __init__(self, plan, aeko_metrics):
+        self.plan = plan
+        self.aeko_metrics = aeko_metrics
+
+
 class StubAnalyzer:
     def __init__(self, plan=None, error=None):
         self.plan = plan or StubPlan()
@@ -54,11 +78,11 @@ class StubAnalyzer:
     def set_context(self, context):
         self.context = context
 
-    def analyze(self, inventory, *, id_external_inventory):
-        self.analyzed.append((inventory, id_external_inventory))
+    def analyze(self, inventory, *, id_external_inventory, id_request):
+        self.analyzed.append((inventory, id_external_inventory, id_request))
         if self.error is not None:
             raise self.error
-        return self.plan
+        return StubAnalysis(self.plan, StubMetrics(id_request=id_request))
 
 
 class StubAnalyzerFactory:
@@ -160,7 +184,7 @@ def test_analyze_receives_the_inventory_as_markdown():
 
     run(analyzers=analyzers)
 
-    inventory, _ = analyzers.last.analyzed[0]
+    inventory, _, _ = analyzers.last.analyzed[0]
     assert isinstance(inventory, str)
     assert "| Caldeira | 12400 |" in inventory
 
@@ -170,7 +194,7 @@ def test_analyze_receives_the_inventory_identifier():
 
     run(analyzers=analyzers)
 
-    _, id_external_inventory = analyzers.last.analyzed[0]
+    _, id_external_inventory, _ = analyzers.last.analyzed[0]
     assert id_external_inventory == ID_INVENTORY
 
 
@@ -250,3 +274,72 @@ def test_a_spreadsheet_that_cannot_be_read_is_rejected():
 def test_a_failing_analyzer_is_surfaced():
     with pytest.raises(RuntimeError, match="coordinator never produced the plan"):
         run(analyzers=StubAnalyzerFactory(error=RuntimeError("coordinator never produced the plan")))
+
+
+# ---------------------------------------------------------------------------
+# The analysis's own event tracking
+# ---------------------------------------------------------------------------
+@pytest.fixture
+def recorded_metrics():
+    """Everything the service hands to the `aeko_metrics` sink, in order."""
+    metrics = []
+    set_aeko_metrics_sink(metrics.append)
+    yield metrics
+    set_aeko_metrics_sink(None)
+
+
+def test_the_analyzer_is_handed_the_identifier_the_request_is_tracked_under():
+    analyzers = StubAnalyzerFactory()
+    token = bind_id_request("65a8b3d6c0f8e1d7f4b2c0aa")
+
+    try:
+        run(analyzers=analyzers)
+    finally:
+        unbind_id_request(token)
+
+    assert analyzers.last.analyzed[0][2] == "65a8b3d6c0f8e1d7f4b2c0aa"
+
+
+def test_an_analysis_records_what_it_cost(recorded_metrics):
+    token = bind_id_request("65a8b3d6c0f8e1d7f4b2c0aa")
+
+    try:
+        run()
+    finally:
+        unbind_id_request(token)
+
+    assert [metrics.id_request for metrics in recorded_metrics] == ["65a8b3d6c0f8e1d7f4b2c0aa"]
+    assert recorded_metrics[0].flow == "analytical"
+
+
+def test_an_analysis_that_raised_records_the_tracking_it_carried_out(recorded_metrics):
+    """`analyze()` raises when the coordinator never writes the plan's sections,
+    and the run it did make is the one worth having recorded."""
+    error = RuntimeError("coordinator never produced the plan")
+    error.aeko_metrics = StubMetrics(error_description="MalformedAgentOutputError: no sections")
+
+    with pytest.raises(RuntimeError):
+        run(analyzers=StubAnalyzerFactory(error=error))
+
+    assert [metrics.error_description for metrics in recorded_metrics] == [
+        "MalformedAgentOutputError: no sections"
+    ]
+
+
+def test_a_failure_carrying_no_tracking_records_nothing(recorded_metrics):
+    with pytest.raises(RuntimeError):
+        run(analyzers=StubAnalyzerFactory(error=RuntimeError("gemini down")))
+
+    assert recorded_metrics == []
+
+
+def test_a_recording_that_fails_never_takes_the_analysis_down():
+    def explode(metrics):
+        raise RuntimeError("mongo is down")
+
+    set_aeko_metrics_sink(explode)
+
+    try:
+        assert "high scope 1 emissions" in run()
+    finally:
+        set_aeko_metrics_sink(None)

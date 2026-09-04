@@ -7,9 +7,10 @@ Today that is observability, in four files:
   duration.
 * `shared/request_log.py` — the block a request closes with, carrying the
   operations it ran, in place of uvicorn's access line.
-* `shared/event_tracking.py` — the one row per request that outlives the
-  process, for a dashboard to read. It holds an injected sink rather than a
-  domain, which is what keeps the rule below true.
+* `shared/event_tracking.py` — the rows per request that outlive the process,
+  for a dashboard to read: the gateway's own, and what the SDK reported about
+  the run inside it. It holds injected sinks rather than domains, and the
+  identifier both are read by, which is what keeps the rule below true.
 
 Like every module outside `cmd/api/main.py`, this package never imports `aeko`.
 And, like the two above it, it never imports one of this application's own
@@ -21,10 +22,15 @@ from shared.event_tracking import (
     REQUEST_ID_HEADER,
     Event,
     answer_with_id_request,
+    bind_id_request,
+    current_id_request,
     endpoint_of,
     new_id_request,
+    record_aeko_metrics,
     record_event,
+    set_aeko_metrics_sink,
     set_event_sink,
+    unbind_id_request,
 )
 from shared.logger import (
     APP_NAME,
@@ -66,7 +72,9 @@ __all__ = [
     "RequestLogMiddleware",
     "TIMESTAMP_FORMAT",
     "answer_with_id_request",
+    "bind_id_request",
     "color_enabled",
+    "current_id_request",
     "elapsed_since",
     "endpoint_of",
     "format_entry",
@@ -76,9 +84,12 @@ __all__ = [
     "new_id_request",
     "operation",
     "paint",
+    "record_aeko_metrics",
     "record_event",
+    "set_aeko_metrics_sink",
     "set_event_sink",
     "silence_uvicorn_access_log",
     "streaming",
+    "unbind_id_request",
     "write",
 ]

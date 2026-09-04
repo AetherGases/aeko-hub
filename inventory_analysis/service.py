@@ -3,6 +3,7 @@ from improvement_plan.improvement_plan import IService as IImprovementPlanServic
 
 from inventory_analysis.inventory_analysis import IService, IRepository
 from inventory_analysis.inventory_markdown import inventory_markdown_from_xlsx
+from shared import current_id_request, record_aeko_metrics
 from user.user import IService as IUserService, UserMemory
 
 class Service(IService):
@@ -34,12 +35,19 @@ class Service(IService):
         if inventory_data:
             aeko_inventory_analyzer.set_context(_context_from(inventory_data))
 
-        plan = aeko_inventory_analyzer.analyze(
+        # The same identifier the request is already tracked under, and the
+        # same recording the conversational flow does — an analysis is the
+        # other kind of run this API pays the SDK for.
+        analysis = _analyze(
+            aeko_inventory_analyzer,
             inventory_markdown,
-            id_external_inventory=id_external_inventory_4context,
+            id_external_inventory_4context,
+            current_id_request(),
         )
 
-        improvement_plan = improvement_plan_from_aeko_plan(plan)
+        record_aeko_metrics(analysis.aeko_metrics)
+
+        improvement_plan = improvement_plan_from_aeko_plan(analysis.plan)
 
         improvement_plan_service.create(improvement_plan)
         user_service.create_user_memory(
@@ -53,12 +61,32 @@ class Service(IService):
 
         return str(improvement_plan)
 
+def _analyze(analyzer, inventory_markdown: str, id_external_inventory: int, id_request: str):
+    """Run the analysis, and record what it cost even when it raised.
+
+    `analyze()` raises when the coordinator never writes the plan's three
+    sections, and the run it did make — every analyst before it included — is
+    exactly the one worth having recorded. The exception is re-raised untouched.
+    """
+
+    try:
+        return analyzer.analyze(
+            inventory_markdown,
+            id_external_inventory=id_external_inventory,
+            id_request=id_request,
+        )
+    except Exception as exc:
+        record_aeko_metrics(getattr(exc, "aeko_metrics", None))
+        raise
+
+
 def improvement_plan_from_aeko_plan(plan) -> ImprovementPlan:
     """Map an `AekoImprovementPlan` onto the document this API persists.
 
-    `_id` and `updated_at` are left to the database: 2.0 hands back three
+    `_id` and `updated_at` are left to the database: the SDK hands back three
     content fields the coordinator actually wrote, and nothing else about the
-    plan is the SDK's to decide.
+    plan is its to decide. Since 3.x the plan arrives inside an
+    `AekoAnalysisResponse`, beside what producing it cost — read off `.plan`.
     """
     return ImprovementPlan(
         id=None,
