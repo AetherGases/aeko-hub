@@ -1,26 +1,4 @@
-"""Tests for the `hub_metrics` domain and the event tracking that feeds it.
-
-The log block of `shared/request_log.py` says what a request did while the
-process is alive; nothing of it survives a restart, so no dashboard can be
-built on top of it. Event tracking is the other half: every request leaves one
-row — under the `_id` its caller was answered with, saying how long it took,
-what it answered and which endpoint it was — and `hub_metrics` is the domain
-that stores those rows and hands them back.
-
-What is worth pinning down:
-
-* the domain itself — entity, query helpers, repository and service, the same
-  four layers every other domain here has;
-* the tracking — one event per request, whatever the request did, with the
-  route *template* as the endpoint so a dashboard can group by it;
-* the sink — `shared` never imports a domain, so `cmd/api/main.py` registers
-  the function that writes. Without one, tracking is a no-op;
-* the response header — the identifier goes back to the caller, and it is the
-  same one the row was stored under, or it names nothing;
-* that a metric which fails to be written never takes the request down with it.
-
-No Mongo and no network: the same doubles the sibling modules use.
-"""
+"""Verify hub metrics behavior and error handling."""
 
 import asyncio
 import re
@@ -37,8 +15,8 @@ from hub_metrics.entity import Metric
 from hub_metrics.hub_metrics import IRepository, IService
 from hub_metrics.service import Service
 from internal.http import hub_metrics_handlers
-from shared import event_tracking
-from shared.event_tracking import (
+from internal.shared import event_tracking
+from internal.shared.event_tracking import (
     CRASHED_STATUS,
     REQUEST_ID_HEADER,
     UNKNOWN_ENDPOINT,
@@ -48,9 +26,9 @@ from shared.event_tracking import (
     record_event,
     set_event_sink,
 )
-from shared.logger import COLOR_ENV_VAR, Module
-from shared.operation import operation
-from shared.request_log import RequestLogMiddleware
+from internal.shared.logger import Module
+from internal.shared.operation import operation
+from internal.shared.request_log import RequestLogMiddleware
 from tests.mongo_doubles import StubCollection, StubDatabase
 
 ROUTE = "/aether-api/v1/ai/hub-metrics"
@@ -69,6 +47,7 @@ METRIC_DOCUMENT = {
 
 
 def build_metric(**overrides) -> Metric:
+    """Build a metric fixture with optional field overrides."""
     fields = {
         "latency": "12.4ms",
         "response_status": 200,
@@ -80,13 +59,13 @@ def build_metric(**overrides) -> Metric:
 
 @pytest.fixture(autouse=True)
 def no_color(monkeypatch):
-    """These read the description; escape codes would only be in the way."""
-    monkeypatch.delenv(COLOR_ENV_VAR, raising=False)
+    """Disable color output for deterministic log assertions."""
+    monkeypatch.delenv('AEKO_LOG_COLOR', raising=False)
 
 
 @pytest.fixture
 def recorded():
-    """A sink that keeps every event, registered for the length of the test."""
+    """Capture metric sink calls for the duration of the test."""
     events = []
     set_event_sink(events.append)
     yield events
@@ -94,6 +73,7 @@ def recorded():
 
 
 def entries(capsys):
+    """Parse captured log output into module and description pairs."""
     parsed = []
     for line in capsys.readouterr().out.splitlines():
         match = LINE.match(line)
@@ -103,13 +83,12 @@ def entries(capsys):
 
 
 def descriptions(capsys, module):
+    """Return captured operation descriptions for the selected module."""
     return [description for name, description in entries(capsys) if name == module]
 
 
-# ---------------------------------------------------------------------------
-# entity
-# ---------------------------------------------------------------------------
 def test_a_metric_carries_the_three_fields_of_one_request():
+    """Verify that a metric carries the three fields of one request."""
     metric = build_metric()
 
     assert metric.latency == "12.4ms"
@@ -118,19 +97,17 @@ def test_a_metric_carries_the_three_fields_of_one_request():
 
 
 def test_a_metric_may_arrive_without_an_identifier():
-    """Not the normal path — a tracked request already has the `_id` it was
-    answered with — but a row without one is still worth writing."""
+    """Verify that a metric may arrive without an identifier."""
     assert build_metric().id is None
 
 
 def test_a_metric_can_be_built_with_the_identifier_it_was_stored_under():
+    """Verify that a metric can be built with the identifier it was stored under."""
     assert build_metric(id=METRIC_DOCUMENT["_id"]).id == METRIC_DOCUMENT["_id"]
 
 
-# ---------------------------------------------------------------------------
-# query helpers
-# ---------------------------------------------------------------------------
 def test_the_write_query_is_the_document_the_dashboard_reads():
+    """Verify that the write query is the document the dashboard reads."""
     assert q.create_metric_query(build_metric()) == {
         "latency": "12.4ms",
         "response_status": 200,
@@ -139,38 +116,39 @@ def test_the_write_query_is_the_document_the_dashboard_reads():
 
 
 def test_the_write_query_stores_the_identifier_the_caller_was_answered_with():
-    """The header named a row; `_id` is what makes that row findable."""
+    """Verify that the write query stores the identifier the caller was answered with."""
     document = q.create_metric_query(build_metric(id=METRIC_DOCUMENT["_id"]))
 
     assert document["_id"] == ObjectId(METRIC_DOCUMENT["_id"])
 
 
 def test_a_metric_without_an_identifier_lets_mongo_assign_one():
-    """No header was answered with it, so there is nothing to be findable by."""
+    """Verify that a metric without an identifier lets mongo assign one."""
     assert "_id" not in q.create_metric_query(build_metric())
 
 
 def test_the_read_query_matches_every_row():
+    """Verify that the read query matches every row."""
     query, projection = q.get_all_metrics_query()
 
     assert query == {}
     assert projection == {}
 
 
-# ---------------------------------------------------------------------------
-# repository
-# ---------------------------------------------------------------------------
 def build_repository(collection=None):
+    """Build a repository backed by configurable MongoDB doubles."""
     database = StubDatabase(hub_metrics=collection or StubCollection())
     return Repository(database), database
 
 
 def test_repository_implements_the_repository_interface():
+    """Verify that repository implements the repository interface."""
     assert issubclass(Repository, IRepository)
     assert Repository.__abstractmethods__ == frozenset()
 
 
 def test_creating_a_metric_stores_the_document():
+    """Verify that creating a metric stores the document."""
     repository, database = build_repository()
 
     repository.create_metric(build_metric())
@@ -180,6 +158,7 @@ def test_creating_a_metric_stores_the_document():
 
 
 def test_creating_a_metric_returns_it_with_the_identifier_mongo_assigned():
+    """Verify that creating a metric returns it with the identifier mongo assigned."""
     repository, _ = build_repository(StubCollection(inserted_id="65a8b3d6c0f8e1d7f4b2c0aa"))
 
     stored = repository.create_metric(build_metric())
@@ -188,6 +167,7 @@ def test_creating_a_metric_returns_it_with_the_identifier_mongo_assigned():
 
 
 def test_a_write_that_fails_is_reported_as_a_database_error():
+    """Verify that a write that fails is reported as a database error."""
     repository, _ = build_repository(StubCollection(error=ConnectionError("connection refused")))
 
     with pytest.raises(RuntimeError, match="connection refused"):
@@ -195,6 +175,7 @@ def test_a_write_that_fails_is_reported_as_a_database_error():
 
 
 def test_reading_the_metrics_maps_every_document():
+    """Verify that reading the metrics maps every document."""
     repository, _ = build_repository(StubCollection(find_result=[METRIC_DOCUMENT]))
 
     (metric,) = repository.get_all_metrics()
@@ -206,12 +187,14 @@ def test_reading_the_metrics_maps_every_document():
 
 
 def test_an_empty_collection_reads_as_an_empty_list():
+    """Verify that an empty collection reads as an empty list."""
     repository, _ = build_repository(StubCollection(find_result=[]))
 
     assert repository.get_all_metrics() == []
 
 
 def test_a_read_that_fails_is_reported_as_a_database_error():
+    """Verify that a read that fails is reported as a database error."""
     repository, _ = build_repository(StubCollection(error=ConnectionError("connection refused")))
 
     with pytest.raises(RuntimeError, match="connection refused"):
@@ -219,7 +202,7 @@ def test_a_read_that_fails_is_reported_as_a_database_error():
 
 
 def test_a_document_missing_fields_still_becomes_a_metric():
-    """A row written before a field existed must not break the dashboard."""
+    """Verify that a document missing fields still becomes a metric."""
     metric = metric_from_data({"_id": "1"})
 
     assert metric.id == "1"
@@ -228,6 +211,7 @@ def test_a_document_missing_fields_still_becomes_a_metric():
 
 
 def test_both_repository_methods_are_logged_as_database_operations(capsys):
+    """Verify that both repository methods are logged as database operations."""
     repository, _ = build_repository(StubCollection(find_result=[]))
 
     repository.create_metric(build_metric())
@@ -238,9 +222,6 @@ def test_both_repository_methods_are_logged_as_database_operations(capsys):
     assert written[1].startswith("hub_metrics.get_all_metrics succeeded in ")
 
 
-# ---------------------------------------------------------------------------
-# service
-# ---------------------------------------------------------------------------
 class StubMetricsRepository:
     def __init__(self, result=None, error=None):
         self.result = result
@@ -254,18 +235,22 @@ class StubMetricsRepository:
         return self.result
 
     def create_metric(self, metric):
+        """Persist a metric and return it with its database identifier."""
         return self._run("create_metric", metric)
 
     def get_all_metrics(self):
+        """Retrieve all stored metrics."""
         return self._run("get_all_metrics")
 
 
 def test_service_implements_the_service_interface():
+    """Verify that service implements the service interface."""
     assert issubclass(Service, IService)
     assert Service.__abstractmethods__ == frozenset()
 
 
 def test_adding_a_metric_reaches_the_repository():
+    """Verify that adding a metric reaches the repository."""
     repository = StubMetricsRepository()
     metric = build_metric()
 
@@ -275,12 +260,14 @@ def test_adding_a_metric_reaches_the_repository():
 
 
 def test_adding_a_metric_returns_what_was_stored():
+    """Verify that adding a metric returns what was stored."""
     stored = build_metric(id="1")
 
     assert Service(StubMetricsRepository(result=stored)).add_metric(build_metric()) is stored
 
 
 def test_a_failed_write_becomes_a_runtime_error():
+    """Verify that a failed write becomes a runtime error."""
     service = Service(StubMetricsRepository(error=RuntimeError("mongo exploded")))
 
     with pytest.raises(RuntimeError, match="mongo exploded"):
@@ -288,6 +275,7 @@ def test_a_failed_write_becomes_a_runtime_error():
 
 
 def test_reading_the_metrics_reaches_the_repository():
+    """Verify that reading the metrics reaches the repository."""
     repository = StubMetricsRepository(result=[build_metric()])
 
     assert len(Service(repository).get_all_metrics()) == 1
@@ -295,15 +283,13 @@ def test_reading_the_metrics_reaches_the_repository():
 
 
 def test_a_failed_read_becomes_a_runtime_error():
+    """Verify that a failed read becomes a runtime error."""
     service = Service(StubMetricsRepository(error=RuntimeError("mongo exploded")))
 
     with pytest.raises(RuntimeError, match="mongo exploded"):
         service.get_all_metrics()
 
 
-# ---------------------------------------------------------------------------
-# shared/event_tracking.py — the sink
-# ---------------------------------------------------------------------------
 EVENT = Event(
     id_request=METRIC_DOCUMENT["_id"],
     latency="12.4ms",
@@ -313,6 +299,7 @@ EVENT = Event(
 
 
 def test_an_event_carries_exactly_what_a_metric_needs():
+    """Verify that an event carries exactly what a metric needs."""
     assert EVENT.id_request == METRIC_DOCUMENT["_id"]
     assert EVENT.latency == "12.4ms"
     assert EVENT.response_status == 200
@@ -320,16 +307,18 @@ def test_an_event_carries_exactly_what_a_metric_needs():
 
 
 def test_nothing_is_recorded_when_no_sink_is_registered():
-    """The suite, and any process that never wired a database, track nothing."""
+    """Verify that nothing is recorded when no sink is registered."""
     assert record_event(EVENT) is False
 
 
 def test_a_registered_sink_receives_the_event(recorded):
+    """Verify that a registered sink receives the event."""
     assert record_event(EVENT) is True
     assert recorded == [EVENT]
 
 
 def test_the_sink_can_be_taken_back_off():
+    """Verify that the sink can be taken back off."""
     events = []
     set_event_sink(events.append)
     set_event_sink(None)
@@ -339,9 +328,10 @@ def test_the_sink_can_be_taken_back_off():
 
 
 def test_a_sink_that_raises_is_given_up_on_rather_than_propagated(capsys):
-    """A dashboard row is never worth failing the request that produced it."""
+    """Verify that a sink that raises is given up on rather than propagated."""
 
     def explode(event):
+        """Raise the configured failure to exercise error handling."""
         raise RuntimeError("connection refused")
 
     set_event_sink(explode)
@@ -354,19 +344,17 @@ def test_a_sink_that_raises_is_given_up_on_rather_than_propagated(capsys):
 
 
 def test_every_request_identifier_is_its_own():
+    """Verify that every request identifier is its own."""
     assert new_id_request() != new_id_request()
 
 
 def test_the_request_identifier_is_the_one_mongo_will_store_it_under():
-    """It is answered in a header before the row exists, so it must be an `_id`."""
+    """Verify that the request identifier is the one mongo will store it under."""
     assert ObjectId.is_valid(new_id_request())
 
 
-# ---------------------------------------------------------------------------
-# shared/event_tracking.py — the endpoint
-# ---------------------------------------------------------------------------
 def test_the_endpoint_is_the_route_template_not_the_path_that_was_asked_for():
-    """`/user/12345` and `/user/999` are one row on the dashboard, not two."""
+    """Verify that the endpoint is the route template not the path that was asked for."""
     scope = {
         "type": "http",
         "path": "/aether-api/v1/ai/user/12345",
@@ -377,25 +365,26 @@ def test_the_endpoint_is_the_route_template_not_the_path_that_was_asked_for():
 
 
 def test_a_path_that_matched_no_route_is_kept_as_it_came():
+    """Verify that a path that matched no route is kept as it came."""
     assert endpoint_of({"type": "http", "path": "/no-such-endpoint"}) == "/no-such-endpoint"
 
 
 def test_a_route_that_carries_no_template_falls_back_to_the_path():
-    """A mount answers without one, and a row still has to say something."""
+    """Verify that a route that carries no template falls back to the path."""
     scope = {"type": "http", "path": "/mounted/thing", "route": SimpleNamespace()}
 
     assert endpoint_of(scope) == "/mounted/thing"
 
 
 def test_a_scope_without_even_a_path_still_produces_a_row():
+    """Verify that a scope without even a path still produces a row."""
     assert endpoint_of({"type": "http"}) == UNKNOWN_ENDPOINT
 
 
-# ---------------------------------------------------------------------------
-# the middleware: one event per request
-# ---------------------------------------------------------------------------
 def build_app(operations=(), status=200, raises=None):
+    """Build an ASGI application with configurable response behavior."""
     async def app(scope, receive, send):
+        """Serve the simulated ASGI response used by the test."""
         for module, name in operations:
             with operation(module, name):
                 pass
@@ -410,10 +399,13 @@ def build_app(operations=(), status=200, raises=None):
 
 
 async def call(app, method="GET", path="/x", sent=None):
+    """Invoke the ASGI application with a simulated request scope."""
     async def receive():
+        """Supply a simulated ASGI request message."""
         return {"type": "http.request", "body": b"", "more_body": False}
 
     async def send(message):
+        """Send or capture the request messages used by the test."""
         if sent is not None:
             sent.append(message)
 
@@ -421,7 +413,7 @@ async def call(app, method="GET", path="/x", sent=None):
 
 
 def answered_ids(sent):
-    """The `x-request-id` of every response start message in `sent`."""
+    """Extract request identifiers from captured ASGI response headers."""
     return [
         value.decode()
         for message in sent
@@ -432,24 +424,28 @@ def answered_ids(sent):
 
 
 def test_a_request_leaves_exactly_one_event(recorded):
+    """Verify that a request leaves exactly one event."""
     asyncio.run(call(RequestLogMiddleware(build_app([(Module.DATABASE, "user.get_user")]))))
 
     assert len(recorded) == 1
 
 
 def test_the_event_carries_the_status_that_was_answered(recorded):
+    """Verify that the event carries the status that was answered."""
     asyncio.run(call(RequestLogMiddleware(build_app(status=404))))
 
     assert recorded[0].response_status == 404
 
 
 def test_the_event_carries_the_path_of_the_request(recorded):
+    """Verify that the event carries the path of the request."""
     asyncio.run(call(RequestLogMiddleware(build_app()), path="/one"))
 
     assert recorded[0].endpoint == "/one"
 
 
 def test_the_event_latency_is_the_one_the_block_reports(capsys, recorded):
+    """Verify that the event latency is the one the block reports."""
     asyncio.run(call(RequestLogMiddleware(build_app())))
 
     headers = [HEADER.match(line) for line in capsys.readouterr().out.splitlines()]
@@ -458,6 +454,7 @@ def test_the_event_latency_is_the_one_the_block_reports(capsys, recorded):
 
 
 def test_two_requests_are_two_rows_with_two_identifiers(recorded):
+    """Verify that two requests are two rows with two identifiers."""
     app = RequestLogMiddleware(build_app())
 
     asyncio.run(call(app, path="/one"))
@@ -468,13 +465,14 @@ def test_two_requests_are_two_rows_with_two_identifiers(recorded):
 
 
 def test_a_request_that_ran_no_operation_is_still_tracked(recorded):
-    """Event tracking is per request, not per operation."""
+    """Verify that a request that ran no operation is still tracked."""
     asyncio.run(call(RequestLogMiddleware(build_app())))
 
     assert len(recorded) == 1
 
 
 def test_a_request_that_crashed_is_tracked_as_a_server_error(recorded):
+    """Verify that a request that crashed is tracked as a server error."""
     app = RequestLogMiddleware(build_app(raises=RuntimeError("boom")))
 
     with pytest.raises(RuntimeError):
@@ -484,7 +482,9 @@ def test_a_request_that_crashed_is_tracked_as_a_server_error(recorded):
 
 
 def test_a_lifespan_message_is_not_a_request_and_leaves_no_row(recorded):
+    """Verify that a lifespan message is not a request and leaves no row."""
     async def app(scope, receive, send):
+        """Serve the simulated ASGI response used by the test."""
         return None
 
     asyncio.run(RequestLogMiddleware(app)({"type": "lifespan"}, None, None))
@@ -493,7 +493,9 @@ def test_a_lifespan_message_is_not_a_request_and_leaves_no_row(recorded):
 
 
 def test_a_sink_that_fails_does_not_fail_the_request(capsys):
+    """Verify that a sink that fails does not fail the request."""
     def explode(event):
+        """Raise the configured failure to exercise error handling."""
         raise RuntimeError("connection refused")
 
     set_event_sink(explode)
@@ -506,9 +508,10 @@ def test_a_sink_that_fails_does_not_fail_the_request(capsys):
 
 
 def test_the_row_is_written_before_the_block_closes(capsys):
-    """So the write itself is one of the operations the block lists."""
+    """Verify that the row is written before the block closes."""
 
     def sink(event):
+        """Capture or reject the metric supplied by the test scenario."""
         with operation(Module.DATABASE, "hub_metrics.create_metric"):
             pass
 
@@ -523,10 +526,8 @@ def test_the_row_is_written_before_the_block_closes(capsys):
     assert "hub_metrics.create_metric" in lines[1]
 
 
-# ---------------------------------------------------------------------------
-# the response header
-# ---------------------------------------------------------------------------
 def test_the_response_carries_the_identifier_back_to_the_caller():
+    """Verify that the response carries the identifier back to the caller."""
     sent = []
 
     asyncio.run(call(RequestLogMiddleware(build_app()), sent=sent))
@@ -535,7 +536,7 @@ def test_the_response_carries_the_identifier_back_to_the_caller():
 
 
 def test_the_header_is_the_identifier_the_row_was_stored_under(recorded):
-    """The whole point: a caller can name the row that explains their request."""
+    """Verify that the header is the identifier the row was stored under."""
     sent = []
 
     asyncio.run(call(RequestLogMiddleware(build_app()), sent=sent))
@@ -544,6 +545,7 @@ def test_the_header_is_the_identifier_the_row_was_stored_under(recorded):
 
 
 def test_two_requests_are_answered_with_two_identifiers():
+    """Verify that two requests are answered with two identifiers."""
     first, second = [], []
     app = RequestLogMiddleware(build_app())
 
@@ -554,7 +556,7 @@ def test_two_requests_are_answered_with_two_identifiers():
 
 
 def test_a_failing_response_carries_it_too():
-    """A 500 is the response whose identifier is worth the most."""
+    """Verify that a failing response carries it too."""
     sent = []
 
     asyncio.run(call(RequestLogMiddleware(build_app(status=500)), sent=sent))
@@ -563,9 +565,11 @@ def test_a_failing_response_carries_it_too():
 
 
 def test_the_headers_the_application_set_are_kept():
+    """Verify that the headers the application set are kept."""
     sent = []
 
     async def app(scope, receive, send):
+        """Serve the simulated ASGI response used by the test."""
         await send(
             {
                 "type": "http.response.start",
@@ -583,10 +587,11 @@ def test_the_headers_the_application_set_are_kept():
 
 
 def test_an_identifier_the_application_wrote_itself_is_replaced_not_added_to():
-    """There is one identifier per request; two would only raise the question."""
+    """Verify that an identifier the application wrote itself is replaced not added to."""
     sent = []
 
     async def app(scope, receive, send):
+        """Serve the simulated ASGI response used by the test."""
         await send(
             {
                 "type": "http.response.start",
@@ -603,7 +608,7 @@ def test_an_identifier_the_application_wrote_itself_is_replaced_not_added_to():
 
 
 def test_a_response_that_never_started_has_nowhere_to_carry_it():
-    """The exception goes up untouched; the row is still written."""
+    """Verify that a response that never started has nowhere to carry it."""
     sent = []
     app = RequestLogMiddleware(build_app(raises=RuntimeError("boom")))
 
@@ -614,7 +619,7 @@ def test_a_response_that_never_started_has_nowhere_to_carry_it():
 
 
 def test_the_real_application_answers_with_the_identifier_of_the_stored_row(api_main):
-    """The header is the `_id`: the caller can be looked up by primary key."""
+    """Verify that the real application answers with the identifier of the stored row."""
     with TestClient(api_main.app) as client:
         response = client.get("/aether-api/v1/ai/user/12345")
         stored = list(api_main.db["hub_metrics"].documents)
@@ -622,9 +627,6 @@ def test_the_real_application_answers_with_the_identifier_of_the_stored_row(api_
     assert response.headers["X-Request-Id"] == str(stored[0]["_id"])
 
 
-# ---------------------------------------------------------------------------
-# the route
-# ---------------------------------------------------------------------------
 class StubMetricsService:
     def __init__(self, metrics=None, error=None):
         self.metrics = metrics or []
@@ -632,9 +634,11 @@ class StubMetricsService:
         self.calls = []
 
     def add_metric(self, metric):
+        """Store a metric through the repository and return the stored entity."""
         raise NotImplementedError
 
     def get_all_metrics(self):
+        """Retrieve all stored metrics."""
         self.calls.append("get_all_metrics")
         if self.error is not None:
             raise self.error
@@ -642,6 +646,7 @@ class StubMetricsService:
 
 
 def build_client(service=None, db="fake-db"):
+    """Build a test client or client double with the supplied dependencies."""
     app = FastAPI()
     app.include_router(hub_metrics_handlers.router)
     app.state.db = db
@@ -651,6 +656,7 @@ def build_client(service=None, db="fake-db"):
 
 
 def test_the_route_returns_every_row():
+    """Verify that the route returns every row."""
     service = StubMetricsService([build_metric(id=METRIC_DOCUMENT["_id"])])
 
     response = build_client(service).get(ROUTE)
@@ -667,6 +673,7 @@ def test_the_route_returns_every_row():
 
 
 def test_an_empty_database_answers_with_an_empty_list():
+    """Verify that an empty database answers with an empty list."""
     response = build_client(StubMetricsService([])).get(ROUTE)
 
     assert response.status_code == 200
@@ -674,6 +681,7 @@ def test_an_empty_database_answers_with_an_empty_list():
 
 
 def test_the_route_maps_an_unexpected_error_to_500():
+    """Verify that the route maps an unexpected error to 500."""
     response = build_client(StubMetricsService(error=RuntimeError("mongo exploded"))).get(ROUTE)
 
     assert response.status_code == 500
@@ -681,6 +689,7 @@ def test_the_route_maps_an_unexpected_error_to_500():
 
 
 def test_the_route_returns_503_when_the_database_is_not_initialized():
+    """Verify that the route returns 503 when the database is not initialized."""
     response = build_client(service=None, db=None).get(ROUTE)
 
     assert response.status_code == 503
@@ -688,7 +697,7 @@ def test_the_route_returns_503_when_the_database_is_not_initialized():
 
 
 def test_the_dependency_builds_the_real_stack():
-    """The route with nothing overridden: handler, service, repository, Mongo."""
+    """Verify that the dependency builds the real stack."""
     database = StubDatabase(hub_metrics=StubCollection(find_result=[METRIC_DOCUMENT]))
 
     response = build_client(service=None, db=database).get(ROUTE)
@@ -698,7 +707,7 @@ def test_the_dependency_builds_the_real_stack():
 
 
 def test_only_the_read_is_exposed():
-    """`add_metric` is the middleware's business, not the caller's."""
+    """Verify that only the read is exposed."""
     app = FastAPI()
     app.include_router(hub_metrics_handlers.router)
 
@@ -706,14 +715,13 @@ def test_only_the_read_is_exposed():
     assert methods <= {"GET", "HEAD"}
 
 
-# ---------------------------------------------------------------------------
-# the wiring
-# ---------------------------------------------------------------------------
 def test_the_route_is_registered_on_the_application(api_main):
+    """Verify that the route is registered on the application."""
     assert "get" in api_main.app.openapi()["paths"].get(ROUTE, {})
 
 
 def test_the_lifespan_registers_a_sink_and_takes_it_back_off(api_main):
+    """Verify that the lifespan registers a sink and takes it back off."""
     with TestClient(api_main.app):
         assert event_tracking._sink is not None
 
@@ -721,7 +729,7 @@ def test_the_lifespan_registers_a_sink_and_takes_it_back_off(api_main):
 
 
 def test_every_request_of_the_real_application_lands_in_the_collection(api_main):
-    """End to end: the middleware, the sink, the service, the repository, Mongo."""
+    """Verify that every request of the real application lands in the collection."""
     with TestClient(api_main.app) as client:
         client.get("/no-such-endpoint")
         stored = list(api_main.db["hub_metrics"].documents)
@@ -734,6 +742,7 @@ def test_every_request_of_the_real_application_lands_in_the_collection(api_main)
 
 
 def test_a_tracked_request_records_the_route_template(api_main):
+    """Verify that a tracked request records the route template."""
     with TestClient(api_main.app) as client:
         client.get("/aether-api/v1/ai/user/12345")
         stored = list(api_main.db["hub_metrics"].documents)

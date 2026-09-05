@@ -1,13 +1,4 @@
-"""Unit tests for the Reports router.
-
-The route is mounted on a standalone app here to cover its HTTP contract on
-its own; `test_app_wiring.py` and `test_e2e.py` cover it inside the real
-application.
-
-What it takes changed with the flow it serves: no S3 reference, no PDF. The
-inventory is resolved by the ms-inventory microservice from its external id,
-and what comes back is the improvement plan that was persisted.
-"""
+"""Verify report routes behavior and error handling."""
 
 import pytest
 from fastapi import FastAPI
@@ -37,6 +28,7 @@ class StubReportService:
         self.calls = []
 
     def input_inventory(self, *args):
+        """Analyze an inventory with previous plans as context, then store its plan and user memory."""
         self.calls.append(args)
         if self.error is not None:
             raise self.error
@@ -55,17 +47,19 @@ class StubUserService:
 
 @pytest.fixture
 def patched_user_service(monkeypatch):
-    """The handler builds the user service inline; swap both halves out."""
+    """Replace the report user service with a test double."""
     monkeypatch.setattr(improvement_plan_handlers, "UserRepository", StubUserRepository)
     monkeypatch.setattr(improvement_plan_handlers, "UserService", StubUserService)
     return StubUserService
 
 
 def build_analyzer_factory():
+    """Build an analyzer factory for the report test application."""
     return lambda: "analyzer"
 
 
 def build_client(service=None, db="fake-db", analyzer_factory=build_analyzer_factory()):
+    """Build a test client or client double with the supplied dependencies."""
     app = FastAPI()
     app.include_router(improvement_plan_handlers.router)
     app.state.db = db
@@ -76,10 +70,8 @@ def build_client(service=None, db="fake-db", analyzer_factory=build_analyzer_fac
     return TestClient(app)
 
 
-# ---------------------------------------------------------------------------
-# The happy path
-# ---------------------------------------------------------------------------
 def test_input_report_returns_the_created_plan(patched_user_service):
+    """Verify that input report returns the created plan."""
     service = StubReportService()
 
     response = build_client(service).post(ROUTE, params=REQUIRED_PARAMS)
@@ -96,6 +88,7 @@ def test_input_report_returns_the_created_plan(patched_user_service):
 
 
 def test_input_report_forwards_what_the_flow_needs(patched_user_service):
+    """Verify that input report forwards what the flow needs."""
     service = StubReportService()
 
     build_client(service).post(ROUTE, params=REQUIRED_PARAMS)
@@ -106,10 +99,8 @@ def test_input_report_forwards_what_the_flow_needs(patched_user_service):
     assert callable(analyzer_factory)
 
 
-# ---------------------------------------------------------------------------
-# What the caller is told when it goes wrong
-# ---------------------------------------------------------------------------
 def test_input_report_maps_value_error_to_400(patched_user_service):
+    """Verify that input report maps value error to 400."""
     service = StubReportService(error=ValueError("id_external_inventory is required."))
 
     response = build_client(service).post(ROUTE, params=REQUIRED_PARAMS)
@@ -119,8 +110,7 @@ def test_input_report_maps_value_error_to_400(patched_user_service):
 
 
 def test_input_report_maps_a_plan_that_never_took_shape_to_502(patched_user_service):
-    """The run was made and is recorded; what it produced is simply not a
-    report, and the answer to that is to ask again rather than to page anyone."""
+    """Verify that input report maps a plan that never took shape to 502."""
     service = StubReportService(
         error=MalformedPlanError("The analysis produced no plan in the shape a report is stored in.")
     )
@@ -134,6 +124,7 @@ def test_input_report_maps_a_plan_that_never_took_shape_to_502(patched_user_serv
 
 
 def test_input_report_maps_unexpected_error_to_500(patched_user_service):
+    """Verify that input report maps unexpected error to 500."""
     service = StubReportService(error=RuntimeError("analyzer down"))
 
     response = build_client(service).post(ROUTE, params=REQUIRED_PARAMS)
@@ -143,6 +134,7 @@ def test_input_report_maps_unexpected_error_to_500(patched_user_service):
 
 
 def test_input_report_returns_503_when_database_is_not_initialized():
+    """Verify that input report returns 503 when database is not initialized."""
     response = build_client(service=None, db=None).post(ROUTE, params=REQUIRED_PARAMS)
 
     assert response.status_code == 503
@@ -150,8 +142,7 @@ def test_input_report_returns_503_when_database_is_not_initialized():
 
 
 def test_input_report_returns_500_when_the_sdk_was_never_configured(patched_user_service):
-    """The analyzer factory is published by the lifespan; without it there is
-    no SDK to run the report through."""
+    """Verify that input report returns 500 when the sdk was never configured."""
     response = build_client(StubReportService(), analyzer_factory=None).post(ROUTE, params=REQUIRED_PARAMS)
 
     assert response.status_code == 500
@@ -160,6 +151,7 @@ def test_input_report_returns_500_when_the_sdk_was_never_configured(patched_user
 
 @pytest.mark.parametrize("missing", list(REQUIRED_PARAMS))
 def test_input_report_requires_every_parameter(missing, patched_user_service):
+    """Verify that input report requires every parameter."""
     params = {key: value for key, value in REQUIRED_PARAMS.items() if key != missing}
 
     response = build_client(StubReportService()).post(ROUTE, params=params)
@@ -169,7 +161,7 @@ def test_input_report_requires_every_parameter(missing, patched_user_service):
 
 @pytest.mark.parametrize("param", ["id_external_inventory", "id_external_unit"])
 def test_the_external_identifiers_must_be_numbers(param, patched_user_service):
-    """Both reference Postgres, and the SDK takes the inventory's as an int."""
+    """Verify that the external identifiers must be numbers."""
     params = {**REQUIRED_PARAMS, param: "not-a-number"}
 
     response = build_client(StubReportService()).post(ROUTE, params=params)

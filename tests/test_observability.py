@@ -1,25 +1,4 @@
-"""Tests that the application actually writes the lines `shared` can write.
-
-`test_logger.py` covers the log line itself. This module covers the other half,
-which is the one that rots: that every place worth a line still produces one.
-A logging package nobody calls passes its own tests forever.
-
-The four categories, and where each is instrumented:
-
-* `database` — the concrete repositories, plus the `ping` that decides whether
-  the application starts at all.
-* `mcp` — `PersistentMCPSession`: the server's cold start, its close, and each
-  tool call that goes over the wire.
-* `tool` — what an agent asked for, by the name the agent knows it by. An
-  MCP-backed tool therefore leaves two lines, not one: `tool` for the request,
-  `mcp` for the round trip underneath it. That pairing is the point — it is
-  what separates a slow server from a slow agent.
-* `integration` — a vendor's REST API, where the cost is a network round trip
-  this process does not control.
-
-No server, no Mongo and no network here: the same doubles the sibling test
-modules use.
-"""
+"""Verify observability behavior and error handling."""
 
 import asyncio
 import re
@@ -28,12 +7,12 @@ import pytest
 from fastapi import FastAPI
 
 from cmd.api.integrations import climatiq_api
-from cmd.api.mcp import mcp_session
-from cmd.api.mcp.mcp_session import PersistentMCPSession
+from cmd.api.integrations.mcp import mcp_session
+from cmd.api.integrations.mcp.mcp_session import PersistentMCPSession
 from cmd.api.tools import calculator, finance
 from improvement_plan.database.repository import Repository as ImprovementPlanRepository
 from session.database.repository import Repository as SessionRepository
-from shared.logger import COLOR_ENV_VAR
+
 from tests.mongo_doubles import StubCollection, StubDatabase
 from user.database.repository import Repository as UserRepository
 
@@ -56,12 +35,12 @@ SESSION_DOCUMENT = {
 
 @pytest.fixture(autouse=True)
 def no_color_override(monkeypatch):
-    """These read the description; escape codes would only be in the way."""
-    monkeypatch.delenv(COLOR_ENV_VAR, raising=False)
+    """Clear the color override for terminal-detection tests."""
+    monkeypatch.delenv('AEKO_LOG_COLOR', raising=False)
 
 
 def entries(capsys):
-    """Every log line the call wrote, as `(module, description)` pairs."""
+    """Parse captured log output into module and description pairs."""
     parsed = []
     for line in capsys.readouterr().out.splitlines():
         match = LINE.match(line)
@@ -71,13 +50,12 @@ def entries(capsys):
 
 
 def descriptions(capsys, module):
+    """Return captured operation descriptions for the selected module."""
     return [description for name, description in entries(capsys) if name == module]
 
 
-# ---------------------------------------------------------------------------
-# database
-# ---------------------------------------------------------------------------
 def test_a_user_read_is_logged(capsys):
+    """Verify that a user read is logged."""
     repository = UserRepository(StubDatabase(user=StubCollection(find_one_result=USER_DOCUMENT)))
 
     repository.get_user(12345)
@@ -86,6 +64,7 @@ def test_a_user_read_is_logged(capsys):
 
 
 def test_a_user_read_that_finds_nobody_is_logged_as_a_failure(capsys):
+    """Verify that a user read that finds nobody is logged as a failure."""
     repository = UserRepository(StubDatabase(user=StubCollection(find_one_result=None)))
 
     with pytest.raises(ValueError):
@@ -95,6 +74,7 @@ def test_a_user_read_that_finds_nobody_is_logged_as_a_failure(capsys):
 
 
 def test_a_database_error_reaches_the_log_by_name(capsys):
+    """Verify that a database error reaches the log by name."""
     collection = StubCollection(error=ConnectionError("connection refused"))
     repository = UserRepository(StubDatabase(user=collection))
 
@@ -107,6 +87,7 @@ def test_a_database_error_reaches_the_log_by_name(capsys):
 
 
 def test_a_session_read_is_logged_under_its_own_name(capsys):
+    """Verify that a session read is logged under its own name."""
     database = StubDatabase(session=StubCollection(find_one_result=SESSION_DOCUMENT))
 
     SessionRepository(database).get_session("65a8b3d6c0f8e1d7f4b2c001")
@@ -115,6 +96,7 @@ def test_a_session_read_is_logged_under_its_own_name(capsys):
 
 
 def test_a_session_write_is_logged(capsys):
+    """Verify that a session write is logged."""
     database = StubDatabase(session=StubCollection())
 
     SessionRepository(database).update_name("65a8b3d6c0f8e1d7f4b2c001", "Escopo 2")
@@ -123,6 +105,7 @@ def test_a_session_write_is_logged(capsys):
 
 
 def test_an_improvement_plan_read_is_logged(capsys):
+    """Verify that an improvement plan read is logged."""
     collection = StubCollection(find_one_result={"_id": "1", "id_external_inventory": 7})
     database = StubDatabase(improvement_plan=collection)
 
@@ -134,9 +117,10 @@ def test_an_improvement_plan_read_is_logged(capsys):
 
 
 def test_the_startup_ping_is_logged_as_a_database_access(capsys, api_main):
-    """The first database access of the process, and the one that gates the rest."""
+    """Verify that the startup ping is logged as a database access."""
 
     async def start_and_stop():
+        """Start the test session and close it after use."""
         async with api_main.lifespan(FastAPI()):
             pass
 
@@ -148,9 +132,6 @@ def test_the_startup_ping_is_logged_as_a_database_access(capsys, api_main):
     )
 
 
-# ---------------------------------------------------------------------------
-# mcp
-# ---------------------------------------------------------------------------
 class FakeTool:
     def __init__(self, name, result=None, fails_with=None):
         self.name = name
@@ -158,6 +139,7 @@ class FakeTool:
         self.fails_with = fails_with
 
     async def ainvoke(self, kwargs):
+        """Record an asynchronous tool invocation and return its scripted response."""
         if self.fails_with is not None:
             raise self.fails_with
         return self.result
@@ -181,14 +163,16 @@ class FakeClient:
         self.opened = 0
 
     def session(self, server_name):
+        """Provide a simulated MCP session context."""
         return FakeSessionContext(self)
 
 
 @pytest.fixture(autouse=True)
 def fake_tool_loading(monkeypatch):
-    """The real `load_mcp_tools` would speak MCP to a fake session."""
+    """Replace MCP tool discovery with scripted tools."""
 
     async def load_tools(session, **kwargs):
+        """Return scripted tools for MCP session discovery."""
         return session.tools
 
     monkeypatch.setattr(mcp_session, "load_mcp_tools", load_tools)
@@ -196,6 +180,7 @@ def fake_tool_loading(monkeypatch):
 
 @pytest.fixture
 def closing():
+    """Close the test session after use."""
     sessions = []
     yield sessions.append
     for session in sessions:
@@ -203,12 +188,13 @@ def closing():
 
 
 def build_session(tools):
+    """Build a session fixture with configurable dependencies."""
     client = FakeClient(tools)
     return PersistentMCPSession("chroma", lambda: client)
 
 
 def test_opening_a_server_is_logged(capsys, closing):
-    """The cold start is the whole cost of the first question; it gets a line."""
+    """Verify that opening a server is logged."""
     session = build_session([FakeTool("query_gases_info", result="ok")])
     closing(session)
 
@@ -218,7 +204,7 @@ def test_opening_a_server_is_logged(capsys, closing):
 
 
 def test_a_warm_server_is_not_logged_again(capsys, closing):
-    """A `.start` line always means a server was spawned."""
+    """Verify that a warm server is not logged again."""
     session = build_session([FakeTool("query_gases_info", result="ok")])
     closing(session)
 
@@ -230,6 +216,7 @@ def test_a_warm_server_is_not_logged_again(capsys, closing):
 
 
 def test_a_server_that_never_comes_up_is_logged_red(capsys, closing):
+    """Verify that a server that never comes up is logged red."""
     session = PersistentMCPSession(
         "chroma",
         lambda: (_ for _ in ()).throw(RuntimeError("npx is not installed")),
@@ -243,6 +230,7 @@ def test_a_server_that_never_comes_up_is_logged_red(capsys, closing):
 
 
 def test_a_tool_call_over_the_session_is_logged(capsys, closing):
+    """Verify that a tool call over the session is logged."""
     session = build_session([FakeTool("query_gases_info", result="ok")])
     closing(session)
 
@@ -252,6 +240,7 @@ def test_a_tool_call_over_the_session_is_logged(capsys, closing):
 
 
 def test_a_tool_the_server_does_not_expose_is_logged_red(capsys, closing):
+    """Verify that a tool the server does not expose is logged red."""
     session = build_session([FakeTool("query_gases_info", result="ok")])
     closing(session)
 
@@ -263,7 +252,7 @@ def test_a_tool_the_server_does_not_expose_is_logged_red(capsys, closing):
 
 
 def test_closing_the_server_is_logged(capsys, closing):
-    """Paired with `.start`: between the two lines a server process existed."""
+    """Verify that closing the server is logged."""
     session = build_session([FakeTool("query_gases_info", result="ok")])
     closing(session)
     session.start()
@@ -275,21 +264,21 @@ def test_closing_the_server_is_logged(capsys, closing):
 
 
 def test_closing_a_session_that_was_never_opened_says_nothing(capsys):
+    """Verify that closing a session that was never opened says nothing."""
     build_session([]).close()
 
     assert entries(capsys) == []
 
 
-# ---------------------------------------------------------------------------
-# tool
-# ---------------------------------------------------------------------------
 def test_the_calculator_is_logged_by_the_name_the_agent_calls_it(capsys):
+    """Verify that the calculator is logged by the name the agent calls it."""
     calculator._calculate("1200 * 2.68")
 
     assert descriptions(capsys, "tool")[0].startswith("calculator succeeded in ")
 
 
 def test_an_expression_the_calculator_refuses_is_logged_red(capsys):
+    """Verify that an expression the calculator refuses is logged red."""
     with pytest.raises(ValueError):
         calculator._calculate("__import__('os').system('ls')")
 
@@ -297,18 +286,21 @@ def test_an_expression_the_calculator_refuses_is_logged_red(capsys):
 
 
 def test_the_roi_tool_is_logged(capsys):
+    """Verify that the roi tool is logged."""
     finance._calculate_roi({"capex": 1000, "wacc_monthly": 0.01, "monthly_cash_flow": 100})
 
     assert descriptions(capsys, "tool")[0].startswith("calculate_roi succeeded in ")
 
 
 def test_the_payback_tool_is_logged(capsys):
+    """Verify that the payback tool is logged."""
     finance._calculate_payback({"capex": 1000, "wacc_monthly": 0.01, "monthly_cash_flow": 100})
 
     assert descriptions(capsys, "tool")[0].startswith("calculate_payback succeeded in ")
 
 
 def test_a_refused_finance_request_is_logged_red(capsys):
+    """Verify that a refused finance request is logged red."""
     with pytest.raises(ValueError):
         finance._calculate_roi({"capex": 0, "wacc_monthly": 0.01, "monthly_cash_flow": 100})
 
@@ -316,8 +308,8 @@ def test_a_refused_finance_request_is_logged_red(capsys):
 
 
 def test_an_mcp_backed_tool_leaves_both_a_tool_and_an_mcp_line(capsys, monkeypatch, closing):
-    """The pairing that separates a slow server from a slow agent."""
-    from cmd.api.mcp import chroma_mcp
+    """Verify that an mcp backed tool leaves both a tool and an mcp line."""
+    from cmd.api.integrations.mcp import chroma_mcp
 
     session = build_session([FakeTool("query_gases_info", result="ok")])
     closing(session)
@@ -334,10 +326,8 @@ def test_an_mcp_backed_tool_leaves_both_a_tool_and_an_mcp_line(capsys, monkeypat
     assert any(line.startswith("chroma.query_gases_info succeeded in ") for line in mcp_lines)
 
 
-# ---------------------------------------------------------------------------
-# integration
-# ---------------------------------------------------------------------------
 def test_a_climatiq_search_is_logged_as_an_integration(capsys, monkeypatch):
+    """Verify that a climatiq search is logged as an integration."""
     monkeypatch.setattr(climatiq_api, "_request", lambda *args, **kwargs: {"results": []})
 
     climatiq_api._climatiq_search("diesel")
@@ -346,7 +336,9 @@ def test_a_climatiq_search_is_logged_as_an_integration(capsys, monkeypatch):
 
 
 def test_a_climatiq_failure_is_logged_red_with_the_vendors_message(capsys, monkeypatch):
+    """Verify that a climatiq failure is logged red with the vendors message."""
     def fail(*args, **kwargs):
+        """Raise a test failure from the supplied dependency."""
         raise climatiq_api.ClimatiqError("Climatiq returned 502")
 
     monkeypatch.setattr(climatiq_api, "_request", fail)
@@ -360,6 +352,7 @@ def test_a_climatiq_failure_is_logged_red_with_the_vendors_message(capsys, monke
 
 
 def test_a_climatiq_estimate_is_logged(capsys, monkeypatch):
+    """Verify that a climatiq estimate is logged."""
     monkeypatch.setattr(climatiq_api, "_request", lambda *args, **kwargs: {"co2e": 1})
 
     climatiq_api._climatiq_estimate(

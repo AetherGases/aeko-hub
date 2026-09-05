@@ -1,3 +1,10 @@
+"""Compose the FastAPI application, domain services, and Aeko SDK adapters.
+
+This is the only module that imports the SDK. Configuration is captured after
+loading the environment; the application lifespan initializes the database,
+agent tools, and metric sinks and closes database and MCP connections.
+"""
+
 from contextlib import asynccontextmanager
 import os
 import threading
@@ -7,13 +14,13 @@ from fastapi import FastAPI
 from pymongo import MongoClient
 
 from cmd.api.integrations.climatiq_api import get_climatiq_tools
-from cmd.api.mcp.chroma_mcp import CHROMA_SESSION, get_gases_info_tools
-from cmd.api.mcp.mongo_mcp import (
+from cmd.api.integrations.mcp.chroma_mcp import CHROMA_SESSION, get_gases_info_tools
+from cmd.api.integrations.mcp.mongo_mcp import (
     MONGO_SESSION,
     get_improvement_plan_tools,
     get_user_memory_tools,
 )
-from cmd.api.mcp.tavily_mcp import (
+from cmd.api.integrations.mcp.tavily_mcp import (
     TAVILY_SESSION,
     get_tavily_search_tools,
     get_tavily_site_map_tool,
@@ -32,8 +39,7 @@ from internal.http.hub_metrics_handlers import router as hub_metrics_router
 from internal.http.improvement_plan_handlers import router as improvement_plan_router
 from internal.http.session_handlers import router as session_router
 from internal.http.user_handlers import router as user_router
-from session.session import GuardrailRejectedError
-from shared import (
+from internal.shared import (
     Event,
     Module,
     RequestLogMiddleware,
@@ -43,10 +49,9 @@ from shared import (
     set_event_sink,
     silence_uvicorn_access_log,
 )
+from session.session import GuardrailRejectedError
 
-# Single entry point for all aeko imports. Every other module receives
-# SDK instances/DTOs through dependency injection instead of importing the
-# package directly.
+
 from aeko import (
     Aeko,
     AekoInventoryAnalyzer,
@@ -64,59 +69,36 @@ load_dotenv()
 MONGO_URI = os.getenv("MONGO_URI")
 DB_NAME = os.getenv("DB_NAME")
 
-# The SDK never reads the environment: this application owns its configuration
-# and passes it in through `Aeko.config()`. Only the key is required — every
-# other setting falls back to the SDK's own default when left unset.
+
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
 AEKO_FAST_MODEL = os.getenv("AEKO_FAST_MODEL")
 AEKO_SLOW_MODEL = os.getenv("AEKO_SLOW_MODEL")
 AEKO_MAX_TOKENS = os.getenv("AEKO_MAX_TOKENS")
 AEKO_REPORT_MAX_TOKENS = os.getenv("AEKO_REPORT_MAX_TOKENS")
 
-# Tools coming from MCP servers, wrapped as `AekoTool` here — the one place
-# that imports `aeko` — so agent modules only ever hand back plain LangChain
-# tools (see `cmd/api/mcp/tavily_mcp.py`).
+
 TAVILY_SITE_MAP_TOOLS = [AekoTool(tool=tool) for tool in get_tavily_site_map_tool()]
 TAVILY_RESEARCH_TOOLS = [AekoTool(tool=tool) for tool in get_tavily_search_tools()]
 
-# MongoDB MCP: read-only `find`, each pinned in code to one collection (see
-# cmd/api/mcp/mongo_mcp.py) — an agent never chooses the collection itself.
+
 IMPROVEMENT_PLAN_TOOLS = [AekoTool(tool=tool) for tool in get_improvement_plan_tools()]
 USER_MEMORY_TOOLS = [AekoTool(tool=tool) for tool in get_user_memory_tools()]
 
-# ChromaDB MCP: vector search over the `gases-info` collection, pinned in code
-# (see cmd/api/mcp/chroma_mcp.py). Only the green gas analyst gets it.
+
 GASES_INFO_TOOLS = [AekoTool(tool=tool) for tool in get_gases_info_tools()]
 
-# Climatiq's emission factor search and calculator, reached over plain HTTPS
-# rather than MCP (see cmd/api/integrations/climatiq_api.py). Only the
-# pollutant analyst gets them.
+
 CLIMATIQ_TOOLS = [AekoTool(tool=tool) for tool in get_climatiq_tools()]
 
-# Arithmetic, computed in this process (see cmd/api/tools/calculator.py). The
-# one tool below that is nobody's speciality: every agent quotes numbers, and
-# a language model arriving at them by predicting digits is every agent's way
-# of being confidently wrong.
+
 CALCULATOR_TOOLS = [AekoTool(tool=tool) for tool in get_calculator_tools()]
 
-# ROI and payback over a fixed 60-month horizon, computed in this process as
-# well (see cmd/api/tools/finance.py). Only the improvement coordinator
-# gets them: it is the one agent that proposes spending money, and these are
-# the two questions its proposals are judged by.
+
 ROI_PAYBACK_TOOLS = [AekoTool(tool=tool) for tool in get_roi_payback_tools()]
 
-# Tools must follow the defined interfaces in Aeko SDK. The keys are the
-# agents' own names, which is what the graph routes by — pass them exactly as
-# the SDK spells them, accents included. `set_tools()` replaces the whole
-# registry, so every agent's tools travel in the single call below.
-#
-# Four of the SDK's nine agents are absent on purpose. `Roteador` and
-# `Orquestrador` route and consolidate, and the two reviewers — `Guardrail de
-# Saída` and, since 3.2, `Verificador de Resposta` — judge a draft against the
-# analyses that produced it. A reviewer holding a search tool could go find the
-# support the draft lacks, which is the one thing it must never do.
+
 AEKO_TOOLS = {
-    # FAQ only maps the Aether website — it never gets a free-form search tool.
+
     "FAQ": list(TAVILY_SITE_MAP_TOOLS)
     + list(TAVILY_RESEARCH_TOOLS)
     + list(USER_MEMORY_TOOLS)
@@ -124,19 +106,19 @@ AEKO_TOOLS = {
     "Análista de inventários": list(IMPROVEMENT_PLAN_TOOLS)
     + list(USER_MEMORY_TOOLS)
     + list(CALCULATOR_TOOLS),
-    # The only agent that calculates emissions through Climatiq.
+
     "Analista de Poluentes": list(TAVILY_RESEARCH_TOOLS)
     + list(IMPROVEMENT_PLAN_TOOLS)
     + list(USER_MEMORY_TOOLS)
     + list(CLIMATIQ_TOOLS)
     + list(CALCULATOR_TOOLS),
-    # The only agent that reads the `gases-info` vector store.
+
     "Analista de Gases Verdes": list(TAVILY_RESEARCH_TOOLS)
     + list(IMPROVEMENT_PLAN_TOOLS)
     + list(USER_MEMORY_TOOLS)
     + list(GASES_INFO_TOOLS)
     + list(CALCULATOR_TOOLS),
-    # The only agent that weighs an investment before proposing it.
+
     "Coordenador de Melhoria Contínua": list(TAVILY_RESEARCH_TOOLS)
     + list(IMPROVEMENT_PLAN_TOOLS)
     + list(USER_MEMORY_TOOLS)
@@ -144,13 +126,10 @@ AEKO_TOOLS = {
     + list(ROI_PAYBACK_TOOLS),
 }
 
-# Every MCP server this application talks to keeps one session open for the
-# life of the process (see `cmd/api/mcp/mcp_session.py`).
+
 MCP_SESSIONS = (TAVILY_SESSION, MONGO_SESSION, CHROMA_SESSION)
 
-# Opening those sessions starts the server processes, which is the whole cost
-# of a cold start — for Chroma, importing torch and loading model weights. The
-# test suite sets this to "false" so running the tests never spawns a server.
+
 MCP_WARM_UP = os.getenv("AEKO_MCP_WARM_UP", "true")
 
 mongo_client = None
@@ -162,19 +141,11 @@ def _int_or_none(value: str | None) -> int | None:
 
 
 def _warm_up_mcp_sessions() -> None:
-    """Start every MCP server now, in the background.
-
-    In the background because the sessions must not hold up the port: the API
-    answers immediately, and the servers finish waking while the first user is
-    still typing. A session that fails to open is reported and left alone —
-    the call that needs it will try again and raise properly.
-    """
+    """Start each MCP session in a background thread without delaying API startup."""
 
     def warm_up(session) -> None:
+        """Start an MCP session and log a failed warm-up without stopping the API."""
         try:
-            # `start()` logs the server's cold start itself, blue or red.
-            # What is added here is that the warm-up gave up on it: the API
-            # is now serving with that server unopened.
             session.start()
         except Exception as exc:
             log_failure(
@@ -187,29 +158,17 @@ def _warm_up_mcp_sessions() -> None:
 
 
 def _carrying_tracking(error: Exception, cause: MalformedAgentOutputError) -> Exception:
-    """Move the failed run's tracking onto the error that replaces it.
-
-    A run nobody was answered with is still a run that was paid for, and the
-    exception is the only thing left carrying the account of it — dropping it
-    in translation would lose the row that says the outcome happened.
-    """
+    """Copy SDK run metrics to the translated domain exception."""
 
     error.aeko_metrics = getattr(cause, "aeko_metrics", None)
     return error
 
 
 class _Messenger(AekoMessenger):
-    """The SDK's messenger, answering in this API's own error vocabulary.
-
-    Since SDK 3.2 a turn that neither the `Guardrail de Saída` nor the
-    `Verificador de Resposta` approved raises `MalformedAgentOutputError` —
-    where 3.1 returned normally with an empty output. Translating it here is
-    what keeps the rule this file exists for: `MalformedAgentOutputError` is an
-    `aeko` name, and `session/` may not know one. It already has an error for
-    exactly this outcome, so the boundary is where the two meet.
-    """
+    """Adapt SDK conversation errors to domain errors while retaining run metrics."""
 
     def send_message(self, message, session, *, id_request):
+        """Send a conversation turn and translate SDK review errors while retaining metrics."""
         try:
             return super().send_message(message, session, id_request=id_request)
         except MalformedAgentOutputError as exc:
@@ -223,15 +182,10 @@ class _Messenger(AekoMessenger):
 
 
 class _InventoryAnalyzer(AekoInventoryAnalyzer):
-    """The SDK's analyzer, answering in this API's own error vocabulary.
-
-    The report flow reaches neither reviewer, but the coordinator still has to
-    write the plan's three sections and `analyze()` raises the same
-    `MalformedAgentOutputError` when four rewrites did not get it there.
-    Translated here for the same reason its conversational sibling above is.
-    """
+    """Adapt SDK analysis errors to domain errors while retaining run metrics."""
 
     def analyze(self, inventory, *, id_external_inventory, id_request):
+        """Analyze an inventory and translate malformed SDK output to a domain error."""
         try:
             return super().analyze(
                 inventory,
@@ -248,12 +202,7 @@ class _InventoryAnalyzer(AekoInventoryAnalyzer):
 
 
 def build_messenger(user, memories) -> AekoMessenger:
-    """A messenger for one user, built per request.
-
-    It holds only *who* is asking: the conversation travels with each
-    `send_message()` call instead, so nothing about a session is retained
-    between requests and any worker can serve any conversation.
-    """
+    """Build a request-specific SDK messenger from the user and valid memories."""
     return _Messenger(
         AekoUser(
             id=user.id,
@@ -276,7 +225,7 @@ def build_messenger(user, memories) -> AekoMessenger:
 
 
 def build_session(session) -> AekoSession:
-    """The session document the SDK reads the conversation from and appends to."""
+    """Convert a domain session and its messages to the SDK session representation."""
     return AekoSession(
         id=session.id,
         id_user=session.id_user,
@@ -295,22 +244,15 @@ def build_session(session) -> AekoSession:
 
 
 def build_metric_sink(database):
-    """The function `shared/event_tracking.py` calls to persist one request.
-
-    It lives here because this is the only file that may know both halves:
-    `shared` holds an `Event` and no domain, and the domain holds a `Metric`
-    and no middleware. The translation between the two is composition, which
-    is what this module is.
-    """
+    """Build a callback that stores request events under their response identifiers."""
 
     service = HubMetricsService(HubMetricsRepository(database))
 
     def sink(event: Event) -> None:
+        """Persist the supplied tracking data through the configured metric service."""
         service.add_metric(
             Metric(
-                # `_id`, because that is what the caller was already
-                # answered with in the `x-request-id` header: the row has to be
-                # findable under exactly the value they were handed.
+
                 id=event.id_request,
                 latency=event.latency,
                 response_status=event.response_status,
@@ -322,22 +264,15 @@ def build_metric_sink(database):
 
 
 def build_aeko_metrics_sink(database):
-    """The function `shared/event_tracking.py` calls to persist one SDK run.
-
-    Here for the same reason its sibling above is: this is the only file that
-    may know both halves. `shared` holds an `AekoMetrics` it never reads a
-    field of, the domain holds a `Metric` and no SDK, and translating one into
-    the other is composition — which is what this module is.
-    """
+    """Build a callback that stores SDK run metrics and agent invocations in call order."""
 
     service = AekoMetricsService(AekoMetricsRepository(database))
 
     def sink(metrics) -> None:
+        """Persist the supplied tracking data through the configured metric service."""
         service.add_metric(
             AekoMetric(
-                # The request's identifier as a field, not as the `_id`: the
-                # row `hub_metrics` stores for the same request already owns
-                # that value as its primary key.
+
                 id_request=metrics.id_request,
                 latency=metrics.latency,
                 error_description=metrics.error_description,
@@ -350,8 +285,7 @@ def build_aeko_metrics_sink(database):
                         llm=agent.llm,
                         used_tools=list(agent.used_tools),
                     )
-                    # One entry per invocation, in call order — an agent the
-                    # guardrail's retry loop called again is listed again.
+
                     for agent in metrics.used_agents
                 ],
             )
@@ -361,36 +295,25 @@ def build_aeko_metrics_sink(database):
 
 
 def build_inventory_analyzer() -> AekoInventoryAnalyzer:
-    """A fresh analyzer per report: `set_context()` is instance state."""
+    """Create an analyzer with independent context for one report."""
     return _InventoryAnalyzer()
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    """Initialize database, SDK tools, and metric sinks, then release connections on shutdown."""
     global mongo_client, db
 
-    # Before the first request, and after uvicorn has configured its own
-    # logging: `RequestLogMiddleware` closes every request with a block
-    # that says what the request did, and uvicorn's access line would
-    # only repeat its first sentence.
     silence_uvicorn_access_log()
 
     mongo_client = MongoClient(MONGO_URI)
     db = mongo_client[DB_NAME]
     app.state.db = db
 
-    # Event tracking starts here and nowhere earlier: the middleware has been
-    # answering requests since import, but it has nothing to write to until
-    # this database handle exists.
     set_event_sink(build_metric_sink(db))
 
-    # The other half of the same story: what the SDK reported about the run
-    # inside a request, for the requests that made one.
     set_aeko_metrics_sink(build_aeko_metrics_sink(db))
 
-    # Process-wide setup: exactly once, before the first request. Both calls
-    # rebuild every agent, so doing either per request would throw away warm
-    # agents for every concurrent run.
     Aeko.config(
         GEMINI_API_KEY,
         fast_model=AEKO_FAST_MODEL,
@@ -400,16 +323,11 @@ async def lifespan(app: FastAPI):
     )
     AekoMessenger.set_tools(AEKO_TOOLS)
 
-    # The SDK objects are per-request, so what the application publishes are
-    # the factories that build them from this API's own entities.
     app.state._state["aeko_messenger_factory"] = build_messenger
     app.state._state["aeko_session_factory"] = build_session
     app.state._state["aeko_inventory_analyzer_factory"] = build_inventory_analyzer
 
     try:
-        # The first database access of the process, and the one that decides
-        # whether there is an application at all — so it is logged like every
-        # other one instead of being narrated by a `print`.
         with operation(Module.DATABASE, "mongo.ping"):
             db.command("ping")
     except Exception as exc:
@@ -420,14 +338,9 @@ async def lifespan(app: FastAPI):
 
     yield
 
-    # Before the client below is closed: a sink left registered would hand the
-    # next request a database that is no longer there.
     set_event_sink(None)
     set_aeko_metrics_sink(None)
 
-    # Each open session owns a server process — the Chroma one holding a
-    # gigabyte of model weights. Closing them here is what keeps them from
-    # outliving the API.
     for session in MCP_SESSIONS:
         session.close()
 
@@ -463,8 +376,8 @@ app = FastAPI(
     ),
     openapi_tags=OPENAPI_TAGS,
 )
-# Outermost of this application's own middleware, so the block covers the
-# whole request rather than what is left of it after the others.
+
+
 app.add_middleware(RequestLogMiddleware)
 
 app.include_router(user_router)

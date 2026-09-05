@@ -1,3 +1,5 @@
+"""Expose HTTP endpoints and response models for improvement plans."""
+
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from fastapi.concurrency import run_in_threadpool
 from pydantic import BaseModel, Field
@@ -24,13 +26,12 @@ class ImprovementPlanResponseData(BaseModel):
         frozen = True
 
 
-
 def get_improvement_plan_service(request: Request) -> IService:
+    """Build the plan service with database and inventory repositories, or raise HTTP 503."""
     database = request.app.state.db
     if database is None:
         raise HTTPException(status_code=503, detail="Database is not initialized")
-    # Two repositories, two transports: the plans are in Mongo, and the
-    # inventory itself belongs to the ms-inventory microservice.
+
     return Service(Repository(database), InventoryRepository())
 
 @router.post(
@@ -71,17 +72,13 @@ async def input_report(
     id_user: str = Query(..., description="Internal user identifier responsible for the report.", example="65a8b3d6c0f8e1d7f4b2c010"),
     service: IService = Depends(get_improvement_plan_service),
 ) -> ImprovementPlanResponseData:
-    # A fresh analyzer per report, built by the factory the lifespan published:
-    # `set_context()` is instance state (see `cmd/api/main.py`).
+    """Generate an improvement report in a worker thread and translate domain errors to HTTP responses."""
     aeko_inventory_analyzer_factory = request.app.state._state.get("aeko_inventory_analyzer_factory")
 
     if not aeko_inventory_analyzer_factory:
         raise HTTPException(status_code=500, detail="Aeko SDK is not initialized")
 
     try:
-        # An analysis is a whole report long — several model calls, with the
-        # coordinator rewriting its answer when it comes back malformed — so it
-        # never runs on the event loop.
         improvement_plan = await run_in_threadpool(
             service.input_inventory,
             id_external_inventory,
@@ -101,9 +98,6 @@ async def input_report(
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     except MalformedPlanError as exc:
-        # The run was made and is recorded; what it produced is simply not a
-        # report. 502 rather than 500 for the same reason its conversational
-        # sibling is: the answer to it is to ask again, not to page anyone.
         raise HTTPException(status_code=502, detail=str(exc)) from exc
     except Exception as exc:
         raise HTTPException(status_code=500, detail=f"Error processing report: {exc}") from exc

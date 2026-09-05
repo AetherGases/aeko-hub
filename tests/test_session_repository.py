@@ -1,10 +1,4 @@
-"""Unit tests for the concrete session repository and its query helpers.
-
-`session.service.Service` calls `get_user_sessions`, `get_session_messages`,
-`get_session_messages_count`, `get_session`, `create_session`, `save_message`
-and `update_name`. Every one of them must exist on the concrete repository and
-be declared by `session.session.IRepository`.
-"""
+"""Verify session repository behavior and error handling."""
 
 from datetime import datetime
 
@@ -52,44 +46,46 @@ class StubUserRepository:
         self.calls = []
 
     def get_user_by_id(self, id_user):
+        """Retrieve a user by internal identifier, returning None when absent."""
         self.calls.append(id_user)
         return self.user
 
 
 def build_repository(session=None):
+    """Build a repository backed by configurable MongoDB doubles."""
     database = StubDatabase(session=session or StubCollection())
     return Repository(database), database
 
 
-# ---------------------------------------------------------------------------
-# Interface compatibility
-# ---------------------------------------------------------------------------
 def test_repository_implements_the_repository_interface():
+    """Verify that repository implements the repository interface."""
     assert issubclass(Repository, IRepository)
 
 
 def test_repository_has_no_unimplemented_abstract_method():
+    """Verify that repository has no unimplemented abstract method."""
     assert Repository.__abstractmethods__ == frozenset()
 
 
 def test_repository_can_be_instantiated():
+    """Verify that repository can be instantiated."""
     assert isinstance(Repository("db"), IRepository)
 
 
 @pytest.mark.parametrize("method", SERVICE_METHODS)
 def test_repository_exposes_every_method_called_by_the_service(method):
+    """Verify that repository exposes every method called by the service."""
     assert callable(getattr(Repository, method, None))
 
 
 @pytest.mark.parametrize("method", SERVICE_METHODS)
 def test_interface_declares_every_method_called_by_the_service(method):
+    """Verify that interface declares every method called by the service."""
     assert callable(getattr(IRepository, method, None))
 
 
-# ---------------------------------------------------------------------------
-# get_user_sessions
-# ---------------------------------------------------------------------------
 def test_get_user_sessions_maps_every_document():
+    """Verify that get user sessions maps every document."""
     repository, _ = build_repository(StubCollection(find_result=[SESSION_DOCUMENT]))
 
     sessions = repository.get_user_sessions(ID_USER)
@@ -101,6 +97,7 @@ def test_get_user_sessions_maps_every_document():
 
 
 def test_get_user_sessions_queries_by_the_user_identifier():
+    """Verify that get user sessions queries by the user identifier."""
     collection = StubCollection(find_result=[SESSION_DOCUMENT])
     repository, _ = build_repository(collection)
 
@@ -111,6 +108,7 @@ def test_get_user_sessions_queries_by_the_user_identifier():
 
 
 def test_get_user_sessions_raises_value_error_when_there_is_none():
+    """Verify that get user sessions raises value error when there is none."""
     repository, _ = build_repository(StubCollection(find_result=[]))
 
     with pytest.raises(ValueError, match=ID_USER):
@@ -118,16 +116,15 @@ def test_get_user_sessions_raises_value_error_when_there_is_none():
 
 
 def test_get_user_sessions_wraps_database_failures_in_runtime_error():
+    """Verify that get user sessions wraps database failures in runtime error."""
     repository, _ = build_repository(StubCollection(error=OSError("boom")))
 
     with pytest.raises(RuntimeError, match="boom"):
         repository.get_user_sessions(ID_USER)
 
 
-# ---------------------------------------------------------------------------
-# get_session
-# ---------------------------------------------------------------------------
 def test_get_session_returns_the_session_entity():
+    """Verify that get session returns the session entity."""
     repository, _ = build_repository(StubCollection(find_one_result=SESSION_DOCUMENT))
 
     session = repository.get_session(ID_SESSION)
@@ -138,6 +135,7 @@ def test_get_session_returns_the_session_entity():
 
 
 def test_get_session_raises_value_error_when_not_found():
+    """Verify that get session raises value error when not found."""
     repository, _ = build_repository(StubCollection(find_one_result=None))
 
     with pytest.raises(ValueError, match=ID_SESSION):
@@ -145,16 +143,15 @@ def test_get_session_raises_value_error_when_not_found():
 
 
 def test_get_session_wraps_database_failures_in_runtime_error():
+    """Verify that get session wraps database failures in runtime error."""
     repository, _ = build_repository(StubCollection(error=OSError("boom")))
 
     with pytest.raises(RuntimeError, match="boom"):
         repository.get_session(ID_SESSION)
 
 
-# ---------------------------------------------------------------------------
-# get_session_messages
-# ---------------------------------------------------------------------------
 def test_get_session_messages_maps_every_embedded_message():
+    """Verify that get session messages maps every embedded message."""
     document = {"messages": [MESSAGE_DOCUMENT]}
     repository, _ = build_repository(StubCollection(find_one_result=document))
 
@@ -168,12 +165,14 @@ def test_get_session_messages_maps_every_embedded_message():
 
 
 def test_get_session_messages_returns_an_empty_list_when_there_is_none():
+    """Verify that get session messages returns an empty list when there is none."""
     repository, _ = build_repository(StubCollection(find_one_result={"messages": []}))
 
     assert repository.get_session_messages(ID_SESSION) == []
 
 
 def test_get_session_messages_raises_value_error_when_the_session_is_unknown():
+    """Verify that get session messages raises value error when the session is unknown."""
     repository, _ = build_repository(StubCollection(find_one_result=None))
 
     with pytest.raises(ValueError, match=ID_SESSION):
@@ -181,22 +180,22 @@ def test_get_session_messages_raises_value_error_when_the_session_is_unknown():
 
 
 def test_get_session_messages_wraps_database_failures_in_runtime_error():
+    """Verify that get session messages wraps database failures in runtime error."""
     repository, _ = build_repository(StubCollection(error=OSError("boom")))
 
     with pytest.raises(RuntimeError, match="boom"):
         repository.get_session_messages(ID_SESSION)
 
 
-# ---------------------------------------------------------------------------
-# get_session_messages_count
-# ---------------------------------------------------------------------------
 def test_get_session_messages_count_returns_the_size():
+    """Verify that get session messages count returns the size."""
     repository, _ = build_repository(StubCollection(find_one_result={"messages_count": 3}))
 
     assert repository.get_session_messages_count(ID_SESSION) == 3
 
 
 def test_get_session_messages_count_raises_value_error_when_not_found():
+    """Verify that get session messages count raises value error when not found."""
     repository, _ = build_repository(StubCollection(find_one_result=None))
 
     with pytest.raises(ValueError, match=ID_SESSION):
@@ -204,16 +203,15 @@ def test_get_session_messages_count_raises_value_error_when_not_found():
 
 
 def test_get_session_messages_count_wraps_database_failures_in_runtime_error():
+    """Verify that get session messages count wraps database failures in runtime error."""
     repository, _ = build_repository(StubCollection(error=OSError("boom")))
 
     with pytest.raises(RuntimeError, match="boom"):
         repository.get_session_messages_count(ID_SESSION)
 
 
-# ---------------------------------------------------------------------------
-# create_session
-# ---------------------------------------------------------------------------
 def test_create_session_returns_the_new_identifier():
+    """Verify that create session returns the new identifier."""
     collection = StubCollection(inserted_id=ObjectId(ID_SESSION))
     repository, _ = build_repository(collection)
 
@@ -221,6 +219,7 @@ def test_create_session_returns_the_new_identifier():
 
 
 def test_create_session_stores_the_owner_and_an_empty_history():
+    """Verify that create session stores the owner and an empty history."""
     collection = StubCollection()
     repository, _ = build_repository(collection)
 
@@ -232,6 +231,7 @@ def test_create_session_stores_the_owner_and_an_empty_history():
 
 
 def test_create_session_raises_value_error_for_an_unknown_user():
+    """Verify that create session raises value error for an unknown user."""
     repository, _ = build_repository(StubCollection())
 
     with pytest.raises(ValueError, match=ID_USER):
@@ -239,16 +239,15 @@ def test_create_session_raises_value_error_for_an_unknown_user():
 
 
 def test_create_session_wraps_database_failures_in_runtime_error():
+    """Verify that create session wraps database failures in runtime error."""
     repository, _ = build_repository(StubCollection(error=OSError("boom")))
 
     with pytest.raises(RuntimeError, match="boom"):
         repository.create_session(ID_USER, StubUserRepository(user=object()))
 
 
-# ---------------------------------------------------------------------------
-# save_message / update_name
-# ---------------------------------------------------------------------------
 def test_save_message_pushes_the_message_into_the_session():
+    """Verify that save message pushes the message into the session."""
     collection = StubCollection()
     repository, _ = build_repository(collection)
     message = Message(
@@ -268,8 +267,7 @@ def test_save_message_pushes_the_message_into_the_session():
 
 
 def test_a_pushed_turn_is_only_the_exchange_and_its_time():
-    """3.1 moved what a turn cost onto the request's `aeko_metrics`; the three
-    fields it used to carry are no longer written here."""
+    """Verify that a pushed turn is only the exchange and its time."""
     collection = StubCollection()
     repository, _ = build_repository(collection)
 
@@ -282,6 +280,7 @@ def test_a_pushed_turn_is_only_the_exchange_and_its_time():
 
 
 def test_save_message_wraps_database_failures_in_runtime_error():
+    """Verify that save message wraps database failures in runtime error."""
     repository, _ = build_repository(StubCollection(error=OSError("boom")))
     message = Message(input="a", output="b", submitted_at=SUBMITTED_AT)
 
@@ -290,6 +289,7 @@ def test_save_message_wraps_database_failures_in_runtime_error():
 
 
 def test_update_name_sets_the_new_name():
+    """Verify that update name sets the new name."""
     collection = StubCollection()
     repository, _ = build_repository(collection)
 
@@ -301,16 +301,15 @@ def test_update_name_sets_the_new_name():
 
 
 def test_update_name_wraps_database_failures_in_runtime_error():
+    """Verify that update name wraps database failures in runtime error."""
     repository, _ = build_repository(StubCollection(error=OSError("boom")))
 
     with pytest.raises(RuntimeError, match="boom"):
         repository.update_name(ID_SESSION, "new name")
 
 
-# ---------------------------------------------------------------------------
-# mappers
-# ---------------------------------------------------------------------------
 def test_message_from_data_reads_the_stored_field_names():
+    """Verify that message from data reads the stored field names."""
     message = message_from_data(MESSAGE_DOCUMENT)
 
     assert (message.input, message.output) == ("Summarize this session.", "Here is the summary.")
@@ -318,30 +317,26 @@ def test_message_from_data_reads_the_stored_field_names():
 
 
 def test_message_from_data_ignores_what_a_turn_used_to_carry():
-    """Documents written before 3.1 still hold `llm` and the token counts. They
-    are not read back: the cost of a run lives in `aeko_metrics` now, and a
-    turn that quoted its own would be a second account of it."""
+    """Verify that message mapping ignores additional model and token fields."""
     message = message_from_data({**MESSAGE_DOCUMENT, "llm": "m", "input_tokens": 1, "output_tokens": 2})
 
     assert set(vars(message)) == {"input", "output", "submitted_at"}
 
 
 def test_message_from_data_ignores_the_response_field_names():
-    """`input_message`/`output_message` belong to the HTTP response model.
-
-    Mongo never stores them, so the mapper reads the collection field names
-    only and a document without them is a programming error, not a default.
-    """
+    """Verify that message from data ignores the response field names."""
     with pytest.raises(KeyError):
         message_from_data({"input_message": "in", "output_message": "out", "submitted_at": SUBMITTED_AT})
 
 
 def test_message_from_data_ignores_the_legacy_misspelled_output():
+    """Verify that message from data ignores the legacy misspelled output."""
     with pytest.raises(KeyError):
         message_from_data({"input": "in", "ouput": "out", "submitted_at": SUBMITTED_AT})
 
 
 def test_session_from_data_maps_the_document():
+    """Verify that session from data maps the document."""
     session = session_from_data(SESSION_DOCUMENT)
 
     assert (session.id, session.id_user, session.name) == (ID_SESSION, ID_USER, "Weekly emissions review")
@@ -349,8 +344,7 @@ def test_session_from_data_maps_the_document():
 
 
 def test_session_from_data_maps_embedded_messages_into_entities():
-    """`Session.messages` is typed `list[Message]`, so the mapper has to
-    convert the embedded documents instead of forwarding the raw dicts."""
+    """Verify that session from data maps embedded messages into entities."""
     session = session_from_data({**SESSION_DOCUMENT, "messages": [MESSAGE_DOCUMENT]})
 
     assert len(session.messages) == 1
@@ -361,15 +355,14 @@ def test_session_from_data_maps_embedded_messages_into_entities():
 
 
 def test_session_from_data_renders_an_object_id_owner_as_text():
+    """Verify that session from data renders an object id owner as text."""
     session = session_from_data({**SESSION_DOCUMENT, "_id": ObjectId(ID_SESSION), "id_user": ObjectId(ID_USER)})
 
     assert (session.id, session.id_user) == (ID_SESSION, ID_USER)
 
 
-# ---------------------------------------------------------------------------
-# query helpers
-# ---------------------------------------------------------------------------
 def test_session_filter_accepts_both_string_and_object_id():
+    """Verify that session filter accepts both string and object id."""
     query = q.get_session_filter(ID_SESSION)
 
     assert {"_id": ID_SESSION} in query["$or"]
@@ -377,18 +370,21 @@ def test_session_filter_accepts_both_string_and_object_id():
 
 
 def test_session_filter_accepts_an_identifier_that_is_already_an_object_id():
+    """Verify that session filter accepts an identifier that is already an object id."""
     object_id = ObjectId(ID_SESSION)
 
     assert q.get_session_filter(object_id)["$or"] == [{"_id": object_id}, {"_id": object_id}]
 
 
 def test_session_filter_keeps_identifiers_that_are_not_object_ids():
+    """Verify that session filter keeps identifiers that are not object ids."""
     query = q.get_session_filter("not-an-object-id")
 
     assert query["$or"] == [{"_id": "not-an-object-id"}, {"_id": "not-an-object-id"}]
 
 
 def test_get_user_sessions_query_projects_the_session_fields():
+    """Verify that get user sessions query projects the session fields."""
     query, projection = q.get_user_sessions_query(ID_USER)
 
     assert {"id_user": ID_USER} in query["$or"]
@@ -398,6 +394,7 @@ def test_get_user_sessions_query_projects_the_session_fields():
 
 
 def test_get_session_query_projects_the_session_fields():
+    """Verify that get session query projects the session fields."""
     query, projection = q.get_session_query(ID_SESSION)
 
     assert {"_id": ID_SESSION} in query["$or"]
@@ -405,6 +402,7 @@ def test_get_session_query_projects_the_session_fields():
 
 
 def test_get_session_messages_query_projects_the_message_fields():
+    """Verify that get session messages query projects the message fields."""
     query, projection = q.get_session_messages_query(ID_SESSION)
 
     assert {"_id": ID_SESSION} in query["$or"]
@@ -415,6 +413,7 @@ def test_get_session_messages_query_projects_the_message_fields():
 
 
 def test_get_session_messages_count_query_projects_the_size():
+    """Verify that get session messages count query projects the size."""
     query, projection = q.get_session_messages_count_query(ID_SESSION)
 
     assert {"_id": ID_SESSION} in query["$or"]
@@ -422,7 +421,7 @@ def test_get_session_messages_count_query_projects_the_size():
 
 
 def test_get_save_message_query_stores_the_turns_own_timestamp():
-    """The SDK stamps the turn; the API stores what it was handed."""
+    """Verify that get save message query stores the turns own timestamp."""
     update = q.get_save_message_query("in", "out", SUBMITTED_AT)
 
     assert update["$push"]["messages"]["submitted_at"] == SUBMITTED_AT
@@ -430,6 +429,7 @@ def test_get_save_message_query_stores_the_turns_own_timestamp():
 
 
 def test_get_save_message_query_pushes_and_timestamps():
+    """Verify that get save message query pushes and timestamps."""
     update = q.get_save_message_query("in", "out")
 
     assert update["$push"]["messages"]["input"] == "in"
@@ -439,6 +439,7 @@ def test_get_save_message_query_pushes_and_timestamps():
 
 
 def test_get_create_session_query_starts_an_empty_named_session():
+    """Verify that get create session query starts an empty named session."""
     document = q.get_create_session_query(ID_USER)
 
     assert document["id_user"] == ObjectId(ID_USER)
@@ -448,10 +449,12 @@ def test_get_create_session_query_starts_an_empty_named_session():
 
 
 def test_get_create_session_query_keeps_an_owner_that_is_not_an_object_id():
+    """Verify that get create session query keeps an owner that is not an object id."""
     assert q.get_create_session_query("u1")["id_user"] == "u1"
 
 
 def test_get_update_name_query_sets_the_name():
+    """Verify that get update name query sets the name."""
     update = q.get_update_name_query("Scope 3 questions")
 
     assert update["$set"]["name"] == "Scope 3 questions"

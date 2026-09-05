@@ -1,16 +1,4 @@
-"""Unit tests for the improvement plan module.
-
-Entity, queries, repository and service — including the report flow, which
-used to live in `inventory_analysis` and now belongs here: the plan is what an
-analysis produces, and grouping the two put the SDK access beside the
-collection it writes to.
-
-The inventory itself is read from the `ms-inventory` microservice through a
-second repository, injected like the Mongo one and covered in
-`tests/test_ms_inventory.py`. Every collaborator below is a local double: the
-two repositories, the analyzer factory the lifespan publishes, and the user
-service the plan is remembered through.
-"""
+"""Verify improvement plan behavior and error handling."""
 
 import importlib.util
 import inspect
@@ -28,7 +16,7 @@ from improvement_plan.improvement_plan import (
     PREVIOUS_PLANS_FOR_CONTEXT,
 )
 from improvement_plan.service import Service
-from shared.event_tracking import (
+from internal.shared.event_tracking import (
     bind_id_request,
     set_aeko_metrics_sink,
     unbind_id_request,
@@ -56,6 +44,7 @@ PLAN_DOCUMENT = {
 
 
 def previous_plan(id_external_inventory, defined_problem, method, reasoning, updated_at=UPDATED_AT):
+    """Build a previous improvement plan for context assertions."""
     return ImprovementPlan(
         id=f"plan-{id_external_inventory}",
         id_external_inventory=id_external_inventory,
@@ -74,14 +63,17 @@ class StubPlanRepository:
         self.calls = []
 
     def get_by_id_external_inventory(self, id_external_inventory):
+        """Retrieve the improvement plan associated with an external inventory identifier."""
         self.calls.append(("get", id_external_inventory))
         return self.result
 
     def get_last_by_id_external_unit(self, id_external_unit, limit):
+        """Retrieve the latest plans for an external unit, up to the requested limit."""
         self.calls.append(("get_last", id_external_unit, limit))
         return self.previous[:limit]
 
     def create(self, improvement_plan):
+        """Persist an improvement plan and return the stored entity."""
         self.calls.append(("create", improvement_plan))
         if self.result is not None:
             return self.result
@@ -96,6 +88,7 @@ class StubInventoryRepository:
         self.calls = []
 
     def get_inventory_markdown(self, id_external_inventory):
+        """Retrieve the inventory content as Markdown from the inventory service."""
         self.calls.append(id_external_inventory)
         if self.error is not None:
             raise self.error
@@ -136,16 +129,16 @@ class StubAnalyzer:
     def __init__(self, plan=None, error=None):
         self.plan = plan or StubPlan()
         self.error = error
-        # Deliberately `None` rather than "": a context that was never set and
-        # a context set to nothing are different outcomes, and the flow now
-        # demands the second one even for a unit with no history.
+
         self.context = None
         self.analyzed = []
 
     def set_context(self, context):
+        """Record the analysis context supplied by the service."""
         self.context = context
 
     def analyze(self, inventory, *, id_external_inventory, id_request):
+        """Record the inventory analysis call and return or raise its scripted result."""
         self.analyzed.append((inventory, id_external_inventory, id_request))
         if self.error is not None:
             raise self.error
@@ -165,6 +158,7 @@ class StubAnalyzerFactory:
 
     @property
     def last(self):
+        """Return the most recently created test instance."""
         return self.built[-1]
 
 
@@ -173,26 +167,32 @@ class StubUserService:
         self.memories = []
 
     def get_mongo_user(self, id_external_user):
+        """Retrieve the stored user matching an external identifier."""
         raise NotImplementedError
 
     def get_user_memories(self, id_user):
+        """Retrieve the memories stored for a user."""
         return self.memories
 
     def create_user_memory(self, user_memory):
+        """Persist a memory associated with a user."""
         self.memories.append(user_memory)
 
 
 def build_repository(collection=None):
+    """Build a repository backed by configurable MongoDB doubles."""
     collection = collection or StubCollection()
     return Repository(StubDatabase(improvement_plan=collection)), collection
 
 
 def build_service(repository=None, inventories=None):
+    """Build a domain service with configurable repository doubles."""
     return Service(repository or StubPlanRepository(), inventories or StubInventoryRepository())
 
 
 def run(repository=None, inventories=None, analyzers=None, users=None,
         id_external_inventory=ID_INVENTORY, id_external_unit=ID_UNIT):
+    """Execute the scenario under test."""
     service = build_service(repository, inventories)
     return service.input_inventory(
         id_external_inventory,
@@ -203,10 +203,8 @@ def run(repository=None, inventories=None, analyzers=None, users=None,
     )
 
 
-# ---------------------------------------------------------------------------
-# Entity
-# ---------------------------------------------------------------------------
 def test_entity_defaults_to_an_empty_plan():
+    """Verify that entity defaults to an empty plan."""
     plan = ImprovementPlan()
 
     assert (plan.id, plan.id_external_inventory, plan.updated_at) == (None, None, None)
@@ -215,6 +213,7 @@ def test_entity_defaults_to_an_empty_plan():
 
 
 def test_entity_renders_every_field_as_text():
+    """Verify that entity renders every field as text."""
     plan = ImprovementPlan(
         id="p1",
         id_external_inventory=1,
@@ -232,10 +231,8 @@ def test_entity_renders_every_field_as_text():
     assert "'problem'" in rendered
 
 
-# ---------------------------------------------------------------------------
-# Interface compatibility
-# ---------------------------------------------------------------------------
 def test_repository_and_service_implement_their_interfaces():
+    """Verify that repository and service implement their interfaces."""
     assert issubclass(Repository, IRepository)
     assert issubclass(Service, IService)
     assert Repository.__abstractmethods__ == frozenset()
@@ -243,35 +240,30 @@ def test_repository_and_service_implement_their_interfaces():
 
 
 def test_input_inventory_signature_matches_the_interface():
+    """Verify that input inventory signature matches the interface."""
     interface = inspect.signature(IService.input_inventory).parameters
     implementation = inspect.signature(Service.input_inventory).parameters
 
     assert list(interface) == list(implementation)
     assert "aeko_inventory_analyzer_factory" in interface
-    # The S3 reference is gone: the inventory arrives as Markdown from the
-    # ms-inventory microservice, keyed by the same external id the plan is
-    # filed against.
+
     assert "s3" not in interface
     assert "id_external_inventory" in interface
     assert "id_external_unit" in interface
 
 
 def test_the_flow_no_longer_lives_in_its_own_package():
-    """`inventory_analysis` was grouped into this module — S3 and the
-    spreadsheet conversion went with it."""
+    """Verify that inventory analysis belongs to the improvement-plan domain."""
     assert importlib.util.find_spec("inventory_analysis") is None
 
 
 def test_the_inventory_repository_is_an_interface_of_its_own():
-    """Two transports, two repositories: `database/` speaks Mongo and
-    `integration/` speaks HTTP."""
+    """Verify that the inventory repository is an interface of its own."""
     assert "get_inventory_markdown" in IInventoryRepository.__abstractmethods__
 
 
-# ---------------------------------------------------------------------------
-# Repository
-# ---------------------------------------------------------------------------
 def test_get_by_id_external_inventory_returns_the_plan():
+    """Verify that get by id external inventory returns the plan."""
     repository, _ = build_repository(StubCollection(find_one_result=PLAN_DOCUMENT))
 
     plan = repository.get_by_id_external_inventory(1)
@@ -284,6 +276,7 @@ def test_get_by_id_external_inventory_returns_the_plan():
 
 
 def test_get_by_id_external_inventory_queries_by_the_external_inventory():
+    """Verify that get by id external inventory queries by the external inventory."""
     repository, collection = build_repository(StubCollection(find_one_result=PLAN_DOCUMENT))
 
     repository.get_by_id_external_inventory(1)
@@ -292,6 +285,7 @@ def test_get_by_id_external_inventory_queries_by_the_external_inventory():
 
 
 def test_get_by_id_external_inventory_raises_value_error_when_not_found():
+    """Verify that get by id external inventory raises value error when not found."""
     repository, _ = build_repository(StubCollection(find_one_result=None))
 
     with pytest.raises(ValueError, match="not found"):
@@ -299,6 +293,7 @@ def test_get_by_id_external_inventory_raises_value_error_when_not_found():
 
 
 def test_get_by_id_external_inventory_wraps_database_failures():
+    """Verify that get by id external inventory wraps database failures."""
     repository, _ = build_repository(StubCollection(error=OSError("boom")))
 
     with pytest.raises(RuntimeError, match="boom"):
@@ -306,6 +301,7 @@ def test_get_by_id_external_inventory_wraps_database_failures():
 
 
 def test_get_last_by_id_external_unit_returns_the_plans_the_database_answered():
+    """Verify that get last by id external unit returns the plans the database answered."""
     repository, _ = build_repository(StubCollection(find_result=[PLAN_DOCUMENT, PLAN_DOCUMENT]))
 
     plans = repository.get_last_by_id_external_unit(ID_UNIT, 2)
@@ -315,6 +311,7 @@ def test_get_last_by_id_external_unit_returns_the_plans_the_database_answered():
 
 
 def test_get_last_by_id_external_unit_asks_for_the_newest_plans_of_that_unit():
+    """Verify that get last by id external unit asks for the newest plans of that unit."""
     repository, collection = build_repository(StubCollection(find_result=[PLAN_DOCUMENT]))
 
     repository.get_last_by_id_external_unit(ID_UNIT, 2)
@@ -324,13 +321,14 @@ def test_get_last_by_id_external_unit_asks_for_the_newest_plans_of_that_unit():
 
 
 def test_get_last_by_id_external_unit_returns_nothing_for_a_units_first_report():
-    """A unit with no history is not an error — it is every unit's first run."""
+    """Verify that get last by id external unit returns nothing for a units first report."""
     repository, _ = build_repository(StubCollection(find_result=[]))
 
     assert repository.get_last_by_id_external_unit(ID_UNIT, 2) == []
 
 
 def test_get_last_by_id_external_unit_wraps_database_failures():
+    """Verify that get last by id external unit wraps database failures."""
     repository, _ = build_repository(StubCollection(error=OSError("boom")))
 
     with pytest.raises(RuntimeError, match="boom"):
@@ -338,6 +336,7 @@ def test_get_last_by_id_external_unit_wraps_database_failures():
 
 
 def test_create_stores_the_plan_and_returns_it_with_an_identifier():
+    """Verify that create stores the plan and returns it with an identifier."""
     repository, collection = build_repository(StubCollection(inserted_id="65a8b3d6c0f8e1d7f4b2c020"))
     plan = ImprovementPlan(
         id_external_inventory=1,
@@ -355,6 +354,7 @@ def test_create_stores_the_plan_and_returns_it_with_an_identifier():
 
 
 def test_create_wraps_database_failures():
+    """Verify that create wraps database failures."""
     repository, _ = build_repository(StubCollection(error=OSError("boom")))
 
     with pytest.raises(RuntimeError, match="boom"):
@@ -362,6 +362,7 @@ def test_create_wraps_database_failures():
 
 
 def test_improvement_plan_from_data_handles_a_document_without_an_identifier():
+    """Verify that improvement plan from data handles a document without an identifier."""
     plan = improvement_plan_from_data({"id_external_inventory": 2})
 
     assert plan.id is None
@@ -369,14 +370,13 @@ def test_improvement_plan_from_data_handles_a_document_without_an_identifier():
     assert plan.defined_problem == ""
 
 
-# ---------------------------------------------------------------------------
-# Queries
-# ---------------------------------------------------------------------------
 def test_get_by_id_external_inventory_query():
+    """Verify that get by id external inventory query."""
     assert q.get_by_id_external_inventory_query(7) == ({"id_external_inventory": 7}, {})
 
 
 def test_get_last_by_id_external_unit_query_reads_the_newest_plans_of_the_unit():
+    """Verify that get last by id external unit query reads the newest plans of the unit."""
     query, projection, sort, limit = q.get_last_by_id_external_unit_query(ID_UNIT, 2)
 
     assert query == {"id_external_unit": ID_UNIT}
@@ -386,6 +386,7 @@ def test_get_last_by_id_external_unit_query_reads_the_newest_plans_of_the_unit()
 
 
 def test_create_improvement_plan_query_maps_every_field():
+    """Verify that create improvement plan query maps every field."""
     plan = ImprovementPlan(
         id="p1",
         id_external_inventory=1,
@@ -409,16 +410,14 @@ def test_create_improvement_plan_query_maps_every_field():
 
 
 def test_create_improvement_plan_query_stamps_a_missing_update_timestamp():
-    """Every document in the collection carries `updated_at`; a plan built
-    from the Aeko DTO has none, so the query has to stamp it."""
+    """Verify that create improvement plan query stamps a missing update timestamp."""
     document = q.create_improvement_plan_query(ImprovementPlan(id_external_inventory=1))
 
     assert isinstance(document["updated_at"], datetime)
 
 
 def test_create_improvement_plan_query_leaves_out_what_the_plan_does_not_carry():
-    """Mongo has no schema, so a null is a value every reader has to look
-    past. A field the plan has nothing for is simply absent."""
+    """Verify that create improvement plan query leaves out what the plan does not carry."""
     document = q.create_improvement_plan_query(ImprovementPlan(id_external_inventory=1))
 
     assert "id_external_unit" not in document
@@ -426,8 +425,7 @@ def test_create_improvement_plan_query_leaves_out_what_the_plan_does_not_carry()
 
 
 def test_create_improvement_plan_query_keeps_the_external_identifiers_numbers():
-    """`id_external_inventory` and `id_external_unit` reference Postgres,
-    never a Mongo `_id`."""
+    """Verify that create improvement plan query keeps the external identifiers numbers."""
     document = q.create_improvement_plan_query(
         ImprovementPlan(id_external_inventory=7, id_external_unit=ID_UNIT)
     )
@@ -436,10 +434,8 @@ def test_create_improvement_plan_query_keeps_the_external_identifiers_numbers():
     assert isinstance(document["id_external_unit"], int)
 
 
-# ---------------------------------------------------------------------------
-# Service — delegation
-# ---------------------------------------------------------------------------
 def test_service_get_delegates_to_the_repository():
+    """Verify that service get delegates to the repository."""
     plan = ImprovementPlan(id="p1")
     repository = StubPlanRepository(result=plan)
 
@@ -448,6 +444,7 @@ def test_service_get_delegates_to_the_repository():
 
 
 def test_service_get_last_by_id_external_unit_delegates_to_the_repository():
+    """Verify that service get last by id external unit delegates to the repository."""
     plans = [previous_plan(1, "problem", "PDCA", "why")]
     repository = StubPlanRepository(previous=plans)
 
@@ -456,6 +453,7 @@ def test_service_get_last_by_id_external_unit_delegates_to_the_repository():
 
 
 def test_service_create_delegates_to_the_repository():
+    """Verify that service create delegates to the repository."""
     plan = ImprovementPlan(id="p1")
     repository = StubPlanRepository(result=plan)
 
@@ -463,10 +461,8 @@ def test_service_create_delegates_to_the_repository():
     assert repository.calls == [("create", plan)]
 
 
-# ---------------------------------------------------------------------------
-# Service — what the analyzer is handed
-# ---------------------------------------------------------------------------
 def test_the_inventory_is_read_from_the_microservice_by_its_external_id():
+    """Verify that the inventory is read from the microservice by its external id."""
     inventories = StubInventoryRepository()
 
     run(inventories=inventories)
@@ -475,6 +471,7 @@ def test_the_inventory_is_read_from_the_microservice_by_its_external_id():
 
 
 def test_analyze_receives_the_inventory_as_markdown():
+    """Verify that analyze receives the inventory as markdown."""
     analyzers = StubAnalyzerFactory()
 
     run(analyzers=analyzers)
@@ -484,6 +481,7 @@ def test_analyze_receives_the_inventory_as_markdown():
 
 
 def test_analyze_receives_the_inventory_identifier():
+    """Verify that analyze receives the inventory identifier."""
     analyzers = StubAnalyzerFactory()
 
     run(analyzers=analyzers)
@@ -493,7 +491,7 @@ def test_analyze_receives_the_inventory_identifier():
 
 
 def test_every_report_gets_a_fresh_analyzer():
-    """`set_context()` is instance state: a shared analyzer would leak it."""
+    """Verify that every report gets a fresh analyzer."""
     analyzers = StubAnalyzerFactory()
 
     run(analyzers=analyzers)
@@ -503,6 +501,7 @@ def test_every_report_gets_a_fresh_analyzer():
 
 
 def test_the_units_previous_plans_are_asked_for_two_at_a_time():
+    """Verify that the units previous plans are asked for two at a time."""
     repository = StubPlanRepository()
 
     run(repository=repository)
@@ -512,6 +511,7 @@ def test_the_units_previous_plans_are_asked_for_two_at_a_time():
 
 
 def test_the_context_carries_the_content_of_the_last_two_plans():
+    """Verify that the context carries the content of the last two plans."""
     analyzers = StubAnalyzerFactory()
     repository = StubPlanRepository(
         previous=[
@@ -533,13 +533,12 @@ def test_the_context_carries_the_content_of_the_last_two_plans():
         "scope 1 second largest",
     ):
         assert text in context
-    # Most recent first: it is the report this one builds on.
+
     assert context.index("boiler still burning") < context.index("diesel fleet")
 
 
 def test_the_context_is_set_even_when_the_unit_has_no_previous_plan():
-    """`set_context()` is always called: a first report sets an empty context
-    rather than leaving the analyzer's own state untouched."""
+    """Verify that the context is set even when the unit has no previous plan."""
     analyzers = StubAnalyzerFactory()
 
     run(repository=StubPlanRepository(previous=[]), analyzers=analyzers)
@@ -548,22 +547,19 @@ def test_the_context_is_set_even_when_the_unit_has_no_previous_plan():
 
 
 def test_an_inventory_without_an_identifier_is_rejected():
-    """The plan is filed against the inventory, so the id cannot be missing."""
+    """Verify that an inventory without an identifier is rejected."""
     with pytest.raises(ValueError, match="id_external_inventory"):
         run(id_external_inventory=None)
 
 
 def test_a_report_without_a_unit_is_rejected():
-    """The unit is what the previous plans are found by, and what this plan is
-    stored under for the next report."""
+    """Verify that a report without a unit is rejected."""
     with pytest.raises(ValueError, match="id_external_unit"):
         run(id_external_unit=None)
 
 
-# ---------------------------------------------------------------------------
-# Service — what the API does with the plan
-# ---------------------------------------------------------------------------
 def test_the_plan_is_persisted_field_by_field():
+    """Verify that the plan is persisted field by field."""
     repository = StubPlanRepository()
 
     run(repository=repository)
@@ -578,6 +574,7 @@ def test_the_plan_is_persisted_field_by_field():
 
 
 def test_the_plan_is_remembered_for_the_user():
+    """Verify that the plan is remembered for the user."""
     users = StubUserService()
 
     run(users=users)
@@ -590,6 +587,7 @@ def test_the_plan_is_remembered_for_the_user():
 
 
 def test_the_created_plan_is_returned():
+    """Verify that the created plan is returned."""
     plan = run()
 
     assert isinstance(plan, ImprovementPlan)
@@ -598,6 +596,7 @@ def test_the_created_plan_is_returned():
 
 
 def test_an_inventory_the_microservice_cannot_deliver_is_surfaced():
+    """Verify that an inventory the microservice cannot deliver is surfaced."""
     inventories = StubInventoryRepository(error=RuntimeError("ms-inventory answered 503"))
 
     with pytest.raises(RuntimeError, match="ms-inventory answered 503"):
@@ -605,16 +604,14 @@ def test_an_inventory_the_microservice_cannot_deliver_is_surfaced():
 
 
 def test_a_failing_analyzer_is_surfaced():
+    """Verify that a failing analyzer is surfaced."""
     with pytest.raises(RuntimeError, match="coordinator never produced the plan"):
         run(analyzers=StubAnalyzerFactory(error=RuntimeError("coordinator never produced the plan")))
 
 
-# ---------------------------------------------------------------------------
-# Service — the analysis's own event tracking
-# ---------------------------------------------------------------------------
 @pytest.fixture
 def recorded_metrics():
-    """Everything the service hands to the `aeko_metrics` sink, in order."""
+    """Capture SDK run metrics for the duration of the test."""
     metrics = []
     set_aeko_metrics_sink(metrics.append)
     yield metrics
@@ -622,6 +619,7 @@ def recorded_metrics():
 
 
 def test_the_analyzer_is_handed_the_identifier_the_request_is_tracked_under():
+    """Verify that the analyzer is handed the identifier the request is tracked under."""
     analyzers = StubAnalyzerFactory()
     token = bind_id_request("65a8b3d6c0f8e1d7f4b2c0aa")
 
@@ -634,6 +632,7 @@ def test_the_analyzer_is_handed_the_identifier_the_request_is_tracked_under():
 
 
 def test_an_analysis_records_what_it_cost(recorded_metrics):
+    """Verify that an analysis records what it cost."""
     token = bind_id_request("65a8b3d6c0f8e1d7f4b2c0aa")
 
     try:
@@ -646,8 +645,7 @@ def test_an_analysis_records_what_it_cost(recorded_metrics):
 
 
 def test_an_analysis_that_raised_records_the_tracking_it_carried_out(recorded_metrics):
-    """`analyze()` raises when the coordinator never writes the plan's sections,
-    and the run it did make is the one worth having recorded."""
+    """Verify that an analysis that raised records the tracking it carried out."""
     error = RuntimeError("coordinator never produced the plan")
     error.aeko_metrics = StubMetrics(error_description="MalformedAgentOutputError: no sections")
 
@@ -660,6 +658,7 @@ def test_an_analysis_that_raised_records_the_tracking_it_carried_out(recorded_me
 
 
 def test_a_failure_carrying_no_tracking_records_nothing(recorded_metrics):
+    """Verify that a failure carrying no tracking records nothing."""
     with pytest.raises(RuntimeError):
         run(analyzers=StubAnalyzerFactory(error=RuntimeError("gemini down")))
 
@@ -667,7 +666,9 @@ def test_a_failure_carrying_no_tracking_records_nothing(recorded_metrics):
 
 
 def test_a_recording_that_fails_never_takes_the_analysis_down():
+    """Verify that a recording that fails never takes the analysis down."""
     def explode(metrics):
+        """Raise the configured failure to exercise error handling."""
         raise RuntimeError("mongo is down")
 
     set_aeko_metrics_sink(explode)

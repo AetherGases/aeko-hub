@@ -1,15 +1,10 @@
+"""Define the domain entities for conversations and messages."""
+
 from datetime import datetime
 
 
 class Message:
-    """One exchanged turn: what was asked, what was answered, and when.
-
-    What the turn *cost* used to live here too. Since SDK 3.1 it does not: the
-    model that served it and the tokens it burned are reported per agent
-    invocation on the request's own tracking, which the `aeko_metrics` domain
-    stores. Keeping a rolled-up copy on the turn as well would be two records
-    of one fact, free to drift apart and impossible to tell apart once they had.
-    """
+    """One exchanged turn: what was asked, what was answered, and when."""
 
     input: str
     output: str

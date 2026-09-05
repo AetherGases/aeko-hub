@@ -1,3 +1,5 @@
+"""Expose HTTP endpoints and response models for SDK run metrics."""
+
 from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel, Field
 
@@ -31,15 +33,13 @@ class AekoMetricResponseData(BaseModel):
 
 
 def get_aeko_metrics_service(request: Request) -> IService:
+    """Build the SDK metrics service from the application database, or raise HTTP 503."""
     database = request.app.state.db
     if database is None:
         raise HTTPException(status_code=503, detail="Database is not initialized")
     return Service(Repository(database))
 
 
-# Only the read is exposed, for the reason `hub_metrics` exposes only its own:
-# a row here is the SDK's account of a run it served, and a caller able to post
-# one could make the dashboard say a run happened that never did.
 @router.get(
     "/aether-api/v1/ai/aeko-metrics",
     response_model=list[AekoMetricResponseData],
@@ -78,6 +78,7 @@ def get_aeko_metrics_service(request: Request) -> IService:
 def get_all_metrics(
     service: IService = Depends(get_aeko_metrics_service),
 ) -> list[AekoMetricResponseData]:
+    """Retrieve all stored metrics."""
     try:
         return [
             AekoMetricResponseData(

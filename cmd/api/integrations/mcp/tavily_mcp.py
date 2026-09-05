@@ -1,21 +1,4 @@
-"""Turns the Tavily MCP server into LangChain tools.
-
-This module never imports `aeko` — `cmd/api/main.py` is the single entry
-point for the SDK (see `test_only_the_entry_point_imports_the_sdk`), so the
-wrapping into an `AekoTool` happens there. What this module hands back is
-plain LangChain `Tool` objects.
-
-The MCP server (`tavily-mcp`, run over stdio via `npx`) exposes several
-tools — `tavily_search`, `tavily_extract`, `tavily_map`, `tavily_crawl` and
-`tavily_research` (the tool names it reports at runtime, with underscores,
-not the hyphenated spelling its own docs use). Two selections are exposed:
-
-* `get_tavily_search_tools()` — `tavily_search` + `tavily_research`, general
-  web research for agents that need information outside their own knowledge.
-* `get_tavily_site_map_tool()` — `tavily_map` pinned to the Aether website
-  (`AETHER_WEB_SITE_URL`): the agent supplies no URL, so it can only ever map
-  that one site.
-"""
+"""Expose Tavily search, research, and a site map restricted to the configured URL."""
 
 import os
 from typing import Any
@@ -25,18 +8,13 @@ from langchain_mcp_adapters.client import MultiServerMCPClient
 
 from .mcp_session import PersistentMCPSession
 
-from shared import Module, logged
+from internal.shared import Module, logged
 
 TAVILY_SEARCH_TOOL_NAME = "tavily_search"
 TAVILY_RESEARCH_TOOL_NAME = "tavily_research"
 TAVILY_MAP_TOOL_NAME = "tavily_map"
 
-AETHER_WEB_SITE_URL_ENV_VAR = "AETHER_WEB_SITE_URL"
 
-# Pinned on purpose, same reasoning as `cmd/api/mcp/mongo_mcp.py`: `@latest`
-# lets `npx` swap the server's tool schema underneath the application between
-# two runs, which is exactly how the MongoDB integration broke (its `find`
-# gained a required `connectionId` in a major bump nobody asked for).
 TAVILY_MCP_SERVER_PACKAGE = "tavily-mcp@0.2.22"
 
 TAVILY_SEARCH_DESCRIPTION = (
@@ -54,7 +32,7 @@ TAVILY_MAP_DESCRIPTION = (
 
 
 def _configure_mcp_client(tavily_api_key: str | None = None) -> MultiServerMCPClient:
-    """Build the MCP client for the Tavily server, run over stdio via `npx`."""
+    """Build the configured stdio MCP client, validating required credentials."""
 
     if tavily_api_key is None:
         tavily_api_key = os.environ.get("TAVILY_API_KEY", "")
@@ -81,14 +59,11 @@ def _configure_mcp_client(tavily_api_key: str | None = None) -> MultiServerMCPCl
     )
 
 
-# One session for the whole process, so a search no longer pays two `npx`
-# spawns (one to list the tools, one to run the search) before it reaches
-# Tavily.
 TAVILY_SESSION = PersistentMCPSession("tavily", lambda: _configure_mcp_client())
 
 
 def _call_tavily_tool(tool_name: str, **kwargs: Any) -> Any:
-    """Synchronous bridge: one MCP tool call over the shared session."""
+    """Invoke a Tavily tool synchronously through the shared MCP session."""
 
     return TAVILY_SESSION.call_tool(tool_name, **kwargs)
 
@@ -105,14 +80,14 @@ def _tavily_research(query: str) -> Any:
 
 @logged(Module.TOOL, "tavily_map")
 def _tavily_map_aether_site(_input: str = "") -> Any:
-    """Maps only the Aether website — the URL is fixed via env, not agent input."""
+    """Map the Aether URL from the environment without accepting an agent-supplied URL."""
 
-    site_url = os.environ.get(AETHER_WEB_SITE_URL_ENV_VAR, "")
+    site_url = os.environ.get('AETHER_WEB_SITE_URL', "")
     return _call_tavily_tool(TAVILY_MAP_TOOL_NAME, url=site_url)
 
 
 def get_tavily_search_tools() -> list[Tool]:
-    """`tavily_search` and `tavily_research`, for agents doing general web research."""
+    """Return Tavily web search and research tools."""
 
     return [
         Tool(name="tavily_search", description=TAVILY_SEARCH_DESCRIPTION, func=_tavily_search),
@@ -121,7 +96,7 @@ def get_tavily_search_tools() -> list[Tool]:
 
 
 def get_tavily_site_map_tool() -> list[Tool]:
-    """`tavily_map`, pinned to the Aether website, for the FAQ agent."""
+    """Return a Tavily site-map tool restricted to the configured Aether URL."""
 
     return [
         Tool(name="tavily_map", description=TAVILY_MAP_DESCRIPTION, func=_tavily_map_aether_site),

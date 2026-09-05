@@ -1,13 +1,4 @@
-"""Unit tests for the ms-inventory gateway.
-
-The inventory file itself belongs to another microservice now: this gateway
-asks it to resolve an inventory and hands back the Markdown the SDK analyzes.
-Nothing here touches S3 or a spreadsheet — that was the integration this
-replaces.
-
-    GET {MS_INVENTORY_BASE_URL}/aether-api/v1/ms-inventory/resolve/{id}
-    -> {"content": "..."}
-"""
+"""Verify ms inventory behavior and error handling."""
 
 import pytest
 
@@ -28,10 +19,12 @@ class StubResponse:
         self.json_error = json_error
 
     def raise_for_status(self):
+        """Raise the scripted HTTP status error, if configured."""
         if self.status_error is not None:
             raise self.status_error
 
     def json(self):
+        """Return the scripted JSON response body."""
         if self.json_error is not None:
             raise self.json_error
         return self.payload
@@ -39,18 +32,20 @@ class StubResponse:
 
 @pytest.fixture
 def recorded_get(monkeypatch):
-    """`requests.get`, replaced by a recorder answering a readable inventory."""
+    """Replace inventory HTTP requests with a call recorder."""
     calls = []
 
     def fake_get(url, timeout=None):
+        """Record an inventory HTTP request and return its scripted response."""
         calls.append({"url": url, "timeout": timeout})
         return calls_response[0]
 
     calls_response = [StubResponse()]
     monkeypatch.setattr(ms_inventory.requests, "get", fake_get)
-    monkeypatch.setenv(ms_inventory.MS_INVENTORY_BASE_URL_ENV_VAR, BASE_URL)
+    monkeypatch.setenv('MS_INVENTORY_BASE_URL', BASE_URL)
 
     def answer_with(response):
+        """Configure the inventory HTTP response for the test."""
         calls_response[0] = response
 
     fake_get.calls = calls
@@ -58,32 +53,29 @@ def recorded_get(monkeypatch):
     return fake_get
 
 
-# ---------------------------------------------------------------------------
-# Interface compatibility
-# ---------------------------------------------------------------------------
 def test_repository_implements_the_inventory_repository_interface():
+    """Verify that repository implements the inventory repository interface."""
     assert issubclass(Repository, IInventoryRepository)
     assert Repository.__abstractmethods__ == frozenset()
 
 
-# ---------------------------------------------------------------------------
-# The request
-# ---------------------------------------------------------------------------
 def test_the_inventory_is_resolved_by_its_external_identifier(recorded_get):
+    """Verify that the inventory is resolved by its external identifier."""
     Repository().get_inventory_markdown(ID_INVENTORY)
 
     assert recorded_get.calls[0]["url"] == RESOLVE_URL
 
 
 def test_the_request_carries_a_timeout(recorded_get):
-    """A report waits on this call, and `requests` waits forever by default."""
+    """Verify that the request carries a timeout."""
     Repository().get_inventory_markdown(ID_INVENTORY)
 
     assert recorded_get.calls[0]["timeout"] == ms_inventory.MS_INVENTORY_REQUEST_TIMEOUT
 
 
 def test_a_base_url_with_a_trailing_slash_does_not_double_it(recorded_get, monkeypatch):
-    monkeypatch.setenv(ms_inventory.MS_INVENTORY_BASE_URL_ENV_VAR, f"{BASE_URL}/")
+    """Verify that a base url with a trailing slash does not double it."""
+    monkeypatch.setenv('MS_INVENTORY_BASE_URL', f"{BASE_URL}/")
 
     Repository().get_inventory_markdown(ID_INVENTORY)
 
@@ -91,22 +83,22 @@ def test_a_base_url_with_a_trailing_slash_does_not_double_it(recorded_get, monke
 
 
 def test_a_missing_base_url_is_refused_by_name(recorded_get, monkeypatch):
-    monkeypatch.delenv(ms_inventory.MS_INVENTORY_BASE_URL_ENV_VAR, raising=False)
+    """Verify that a missing base url is refused by name."""
+    monkeypatch.delenv('MS_INVENTORY_BASE_URL', raising=False)
 
-    with pytest.raises(RuntimeError, match=ms_inventory.MS_INVENTORY_BASE_URL_ENV_VAR):
+    with pytest.raises(RuntimeError, match='MS_INVENTORY_BASE_URL'):
         Repository().get_inventory_markdown(ID_INVENTORY)
 
     assert recorded_get.calls == []
 
 
-# ---------------------------------------------------------------------------
-# The answer
-# ---------------------------------------------------------------------------
 def test_the_content_field_is_what_comes_back(recorded_get):
+    """Verify that the content field is what comes back."""
     assert Repository().get_inventory_markdown(ID_INVENTORY) == MARKDOWN
 
 
 def test_a_failing_status_is_wrapped_with_the_inventory_it_was_asked_for(recorded_get):
+    """Verify that a failing status is wrapped with the inventory it was asked for."""
     recorded_get.answer_with(StubResponse(status_error=OSError("503 Service Unavailable")))
 
     with pytest.raises(RuntimeError, match="503 Service Unavailable"):
@@ -114,9 +106,11 @@ def test_a_failing_status_is_wrapped_with_the_inventory_it_was_asked_for(recorde
 
 
 def test_a_transport_failure_is_wrapped(monkeypatch):
-    monkeypatch.setenv(ms_inventory.MS_INVENTORY_BASE_URL_ENV_VAR, BASE_URL)
+    """Verify that a transport failure is wrapped."""
+    monkeypatch.setenv('MS_INVENTORY_BASE_URL', BASE_URL)
 
     def explode(url, timeout=None):
+        """Raise the configured failure to exercise error handling."""
         raise OSError("connection refused")
 
     monkeypatch.setattr(ms_inventory.requests, "get", explode)
@@ -126,6 +120,7 @@ def test_a_transport_failure_is_wrapped(monkeypatch):
 
 
 def test_a_body_that_is_not_json_is_wrapped(recorded_get):
+    """Verify that a body that is not json is wrapped."""
     recorded_get.answer_with(StubResponse(json_error=ValueError("Expecting value")))
 
     with pytest.raises(RuntimeError, match="Expecting value"):
@@ -134,8 +129,7 @@ def test_a_body_that_is_not_json_is_wrapped(recorded_get):
 
 @pytest.mark.parametrize("payload", [{}, {"content": ""}, {"content": None}, {"conteudo": "x"}])
 def test_an_answer_without_content_is_rejected(recorded_get, payload):
-    """There is nothing to analyze, which is the caller's problem to hear
-    about — the same 400 the unreadable spreadsheet used to raise."""
+    """Verify that an answer without content is rejected."""
     recorded_get.answer_with(StubResponse(payload=payload))
 
     with pytest.raises(ValueError, match="content"):
@@ -143,6 +137,7 @@ def test_an_answer_without_content_is_rejected(recorded_get, payload):
 
 
 def test_an_answer_that_is_not_an_object_is_rejected(recorded_get):
+    """Verify that an answer that is not an object is rejected."""
     recorded_get.answer_with(StubResponse(payload=["not", "an", "object"]))
 
     with pytest.raises(ValueError, match="content"):

@@ -1,3 +1,5 @@
+"""Expose HTTP endpoints and response models for HTTP request metrics."""
+
 from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel, Field
 
@@ -18,14 +20,13 @@ class MetricResponseData(BaseModel):
 
 
 def get_hub_metrics_service(request: Request) -> IService:
+    """Build the request metrics service from the application database, or raise HTTP 503."""
     database = request.app.state.db
     if database is None:
         raise HTTPException(status_code=503, detail="Database is not initialized")
     return Service(Repository(database))
 
 
-# Only the read is exposed. Writing a metric is the middleware's business —
-# a caller that could post its own rows could also make the dashboard lie.
 @router.get(
     "/aether-api/v1/ai/hub-metrics",
     response_model=list[MetricResponseData],
@@ -54,6 +55,7 @@ def get_hub_metrics_service(request: Request) -> IService:
 def get_all_metrics(
     service: IService = Depends(get_hub_metrics_service),
 ) -> list[MetricResponseData]:
+    """Retrieve all stored metrics."""
     try:
         return [
             MetricResponseData(

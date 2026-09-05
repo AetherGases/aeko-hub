@@ -1,4 +1,6 @@
-from shared import Module, logged
+"""Persist and retrieve conversations and messages through MongoDB."""
+
+from internal.shared import Module, logged
 from session.database import query as q
 from session.entity import Message, Session
 from session.session import IRepository
@@ -11,6 +13,7 @@ class Repository(IRepository):
 
     @logged(Module.DATABASE, "session.get_user_sessions")
     def get_user_sessions(self, id_user: str) -> list[Session]:
+        """Retrieve the sessions belonging to a user."""
         try:
             query, projection = q.get_user_sessions_query(id_user)
             sessions_data = self.db["session"].find(query, projection)
@@ -25,6 +28,7 @@ class Repository(IRepository):
 
     @logged(Module.DATABASE, "session.get_session")
     def get_session(self, id_session: str) -> Session:
+        """Retrieve a session by its internal identifier."""
         try:
             query, projection = q.get_session_query(id_session)
             session_data = self.db["session"].find_one(query, projection)
@@ -38,6 +42,7 @@ class Repository(IRepository):
 
     @logged(Module.DATABASE, "session.get_session_messages")
     def get_session_messages(self, id_session: str) -> list[Message]:
+        """Retrieve the stored messages for a session."""
         try:
             query, projection = q.get_session_messages_query(id_session)
             session_data = self.db["session"].find_one(query, projection)
@@ -51,6 +56,7 @@ class Repository(IRepository):
 
     @logged(Module.DATABASE, "session.get_session_messages_count")
     def get_session_messages_count(self, id_session: str) -> int:
+        """Return the number of messages stored in a session."""
         try:
             query, projection = q.get_session_messages_count_query(id_session)
             session_data = self.db["session"].find_one(query, projection)
@@ -64,6 +70,7 @@ class Repository(IRepository):
 
     @logged(Module.DATABASE, "session.create_session")
     def create_session(self, id_user: str, user_repository: IUserRepository) -> str:
+        """Create an empty session for an existing user and return its identifier."""
         try:
             if not user_repository.get_user_by_id(id_user):
                 raise ValueError(f"User with id_user {id_user} does not exist.")
@@ -78,6 +85,7 @@ class Repository(IRepository):
 
     @logged(Module.DATABASE, "session.save_message")
     def save_message(self, id_session: str, message: Message) -> None:
+        """Append a message to the session and update its modification timestamp."""
         try:
             query = q.get_save_message_query(
                 input=message.input,
@@ -90,15 +98,14 @@ class Repository(IRepository):
 
     @logged(Module.DATABASE, "session.update_name")
     def update_name(self, id_session: str, name: str) -> None:
+        """Update the session name and modification timestamp."""
         try:
             self.db["session"].update_one(q.get_session_filter(id_session), q.get_update_name_query(name))
         except Exception as e:
             raise RuntimeError(f"Error updating session name in database: {e}")
 
 def message_from_data(data: dict) -> Message:
-    """The three fields a turn is, `llm` and the token counts deliberately not
-    read back: documents written before SDK 3.1 still carry them, and reading
-    them would put a second account of a run's cost next to `aeko_metrics`."""
+    """Map a stored message document to a domain message."""
     return Message(
         input=data["input"],
         output=data["output"],
@@ -107,6 +114,7 @@ def message_from_data(data: dict) -> Message:
 
 
 def session_from_data(data: dict) -> Session:
+    """Map a stored session document to a domain session."""
     return Session(
         id=str(data["_id"]),
         id_user=str(data["id_user"]),

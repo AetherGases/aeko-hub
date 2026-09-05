@@ -1,10 +1,4 @@
-"""Application wiring tests.
-
-They cover what the routers and the dependency functions produce when nothing
-is overridden: the routes the application actually exposes, the lifespan
-failure path, and the real handler + service + concrete repository stack
-running against a stubbed Mongo.
-"""
+"""Verify app wiring behavior and error handling."""
 
 from types import SimpleNamespace
 
@@ -42,13 +36,12 @@ SESSION_DOCUMENT = {
 
 
 def request_with(db):
+    """Build an application request with the supplied state."""
     return SimpleNamespace(app=SimpleNamespace(state=SimpleNamespace(db=db)))
 
 
-# ---------------------------------------------------------------------------
-# Route registration
-# ---------------------------------------------------------------------------
 def test_report_route_is_registered_on_the_application(api_main):
+    """Verify that report route is registered on the application."""
     paths = api_main.app.openapi()["paths"]
 
     assert "post" in paths.get(REPORT_ROUTE, {})
@@ -65,10 +58,12 @@ def test_report_route_is_registered_on_the_application(api_main):
     ],
 )
 def test_every_documented_route_is_registered(api_main, path):
+    """Verify that every documented route is registered."""
     assert path in api_main.app.openapi()["paths"]
 
 
 def test_report_route_is_reachable(api_main):
+    """Verify that report route is reachable."""
     with TestClient(api_main.app) as client:
         response = client.post(
             REPORT_ROUTE,
@@ -79,18 +74,18 @@ def test_report_route_is_reachable(api_main):
 
 
 def test_report_route_still_validates_its_query_parameters(api_main):
+    """Verify that report route still validates its query parameters."""
     with TestClient(api_main.app) as client:
         response = client.post(REPORT_ROUTE, params={"id_user": "u1"})
 
     assert response.status_code == 422
 
 
-# ---------------------------------------------------------------------------
-# Lifespan
-# ---------------------------------------------------------------------------
 def test_lifespan_fails_when_the_database_does_not_answer(api_main, monkeypatch):
+    """Verify that lifespan fails when the database does not answer."""
     class UnreachableDatabase:
         def command(self, name):
+            """Record a database command and return a simulated success response."""
             raise OSError("no route to host")
 
     class UnreachableClient:
@@ -101,6 +96,7 @@ def test_lifespan_fails_when_the_database_does_not_answer(api_main, monkeypatch)
             return self.database
 
         def close(self):
+            """Record closure of the simulated resource."""
             pass
 
     monkeypatch.setattr(api_main, "MongoClient", UnreachableClient)
@@ -110,10 +106,8 @@ def test_lifespan_fails_when_the_database_does_not_answer(api_main, monkeypatch)
             pass
 
 
-# ---------------------------------------------------------------------------
-# Dependency functions build the concrete stack
-# ---------------------------------------------------------------------------
 def test_user_dependency_builds_a_service_backed_by_the_concrete_repository():
+    """Verify that user dependency builds a service backed by the concrete repository."""
     service = user_handlers.get_user_service(request_with(StubDatabase()))
 
     assert isinstance(service, UserService)
@@ -121,6 +115,7 @@ def test_user_dependency_builds_a_service_backed_by_the_concrete_repository():
 
 
 def test_session_dependency_builds_a_service_backed_by_the_concrete_repository():
+    """Verify that session dependency builds a service backed by the concrete repository."""
     service = session_handlers.get_session_service(request_with(StubDatabase()))
 
     assert isinstance(service, SessionService)
@@ -128,7 +123,7 @@ def test_session_dependency_builds_a_service_backed_by_the_concrete_repository()
 
 
 def test_report_dependency_builds_a_service_backed_by_the_concrete_repositories():
-    """Two of them: the plans live in Mongo, the inventory in ms-inventory."""
+    """Verify that report dependency builds a service backed by the concrete repositories."""
     service = improvement_plan_handlers.get_improvement_plan_service(request_with(StubDatabase()))
 
     assert isinstance(service, ImprovementPlanService)
@@ -145,17 +140,15 @@ def test_report_dependency_builds_a_service_backed_by_the_concrete_repositories(
     ],
 )
 def test_dependencies_reject_an_uninitialized_database(dependency):
+    """Verify that dependencies reject an uninitialized database."""
     with pytest.raises(HTTPException) as exc_info:
         dependency(request_with(None))
 
     assert exc_info.value.status_code == 503
 
 
-# ---------------------------------------------------------------------------
-# Real stack: handler + service + concrete repository over a stubbed Mongo
-# ---------------------------------------------------------------------------
 def build_client(router, database, api_main=None):
-    """`api_main` supplies the very adapters the real lifespan publishes."""
+    """Build a test client or client double with the supplied dependencies."""
     app = FastAPI()
     app.include_router(router)
     app.state.db = database
@@ -166,6 +159,7 @@ def build_client(router, database, api_main=None):
 
 
 def test_get_user_runs_through_the_concrete_repository():
+    """Verify that get user runs through the concrete repository."""
     database = StubDatabase(user=StubCollection(find_one_result=USER_DOCUMENT))
 
     response = build_client(user_handlers.router, database).get("/aether-api/v1/ai/user/12345")
@@ -175,6 +169,7 @@ def test_get_user_runs_through_the_concrete_repository():
 
 
 def test_get_user_returns_404_when_the_document_does_not_exist():
+    """Verify that get user returns 404 when the document does not exist."""
     database = StubDatabase(user=StubCollection(find_one_result=None))
 
     response = build_client(user_handlers.router, database).get("/aether-api/v1/ai/user/12345")
@@ -183,6 +178,7 @@ def test_get_user_returns_404_when_the_document_does_not_exist():
 
 
 def test_get_user_sessions_runs_through_the_concrete_repository():
+    """Verify that get user sessions runs through the concrete repository."""
     database = StubDatabase(session=StubCollection(find_result=[SESSION_DOCUMENT]))
 
     response = build_client(session_handlers.router, database).get(f"/aether-api/v1/ai/sessions/user/{ID_USER}")
@@ -192,6 +188,7 @@ def test_get_user_sessions_runs_through_the_concrete_repository():
 
 
 def test_get_session_messages_runs_through_the_concrete_repository():
+    """Verify that get session messages runs through the concrete repository."""
     document = {"messages": [{"input": "hi", "output": "ho", "submitted_at": "2026-07-26T14:30:00"}]}
     database = StubDatabase(session=StubCollection(find_one_result=document))
 
@@ -215,11 +212,12 @@ MESSAGES_DOCUMENT = {
 
 
 def session_reads():
-    """What the session collection answers, in the order the service asks."""
+    """Record session reads through the application wiring."""
     return [{"messages_count": 0}, SESSION_DOCUMENT, SESSION_DOCUMENT, MESSAGES_DOCUMENT]
 
 
 def test_send_message_runs_through_the_concrete_repositories(api_main, configured_sdk):
+    """Verify that send message runs through the concrete repositories."""
     session_collection = StubCollection(find_one_results=session_reads())
     database = StubDatabase(
         session=session_collection,
@@ -238,6 +236,7 @@ def test_send_message_runs_through_the_concrete_repositories(api_main, configure
 
 
 def test_send_message_hands_the_real_dtos_to_the_sdk(api_main, configured_sdk):
+    """Verify that send message hands the real dtos to the sdk."""
     database = StubDatabase(
         session=StubCollection(find_one_results=session_reads()),
         user=StubCollection(find_one_result=USER_DOCUMENT),
@@ -258,6 +257,7 @@ def test_send_message_hands_the_real_dtos_to_the_sdk(api_main, configured_sdk):
 
 
 def test_send_message_returns_400_when_the_user_does_not_own_the_session(api_main, configured_sdk):
+    """Verify that send message returns 400 when the user does not own the session."""
     session_collection = StubCollection(find_one_results=session_reads())
     database = StubDatabase(
         session=session_collection,
@@ -274,7 +274,7 @@ def test_send_message_returns_400_when_the_user_does_not_own_the_session(api_mai
 
 
 def test_send_message_fails_when_the_sdk_was_never_configured(api_main):
-    """No `Aeko.config()` means no run: a deployment problem, not a user one."""
+    """Verify that send message fails when the sdk was never configured."""
     database = StubDatabase(
         session=StubCollection(find_one_results=session_reads()),
         user=StubCollection(find_one_result=USER_DOCUMENT),

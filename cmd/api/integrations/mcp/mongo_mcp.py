@@ -1,21 +1,6 @@
-"""Turns the MongoDB MCP server into read-only LangChain tools.
+"""Expose read-only MongoDB searches for improvement plans and user memories.
 
-This module never imports `aeko` — `cmd/api/main.py` is the single entry
-point for the SDK (see `test_only_the_entry_point_imports_the_sdk`), so the
-wrapping into an `AekoTool` happens there. What this module hands back is
-plain LangChain `Tool` objects.
-
-The MCP server (`mongodb-mcp-server`, run over stdio via `npx`) exposes
-several tools; only `find` is used here, and the client is started in
-read-only mode (`MDB_MCP_READ_ONLY`) — agents may query, never write, through
-this integration. Two selections are exposed, each pinned in code to a single
-collection the agent never chooses itself, mirroring how
-`cmd/api/mcp/tavily_mcp.py` pins the FAQ agent's site map to one URL:
-
-* `get_improvement_plan_tools()` — `find` scoped to `improvement_plan`, for
-  agents that read or reason about improvement plans.
-* `get_user_memory_tools()` — `find` scoped to `user_memory`, for agents that
-  read a user's stored memories.
+The server connection, database, and collections are selected by the API.
 """
 
 import json
@@ -27,23 +12,14 @@ from langchain_mcp_adapters.client import MultiServerMCPClient
 
 from .mcp_session import PersistentMCPSession
 
-from shared import Module, logged
+from internal.shared import Module, logged
 
 MONGO_FIND_TOOL_NAME = "find"
 
-MONGO_URI_ENV_VAR = "MONGO_URI"
-DB_NAME_ENV_VAR = "DB_NAME"
 
-# `mongodb-mcp-server` 2.x is multi-connection: every data tool takes a
-# `connectionId`, and the connection the server builds from
-# `MDB_MCP_CONNECTION_STRING` is registered under this fixed id. Omitting it
-# makes the server answer "Invalid input: expected string, received undefined
-# at connectionId" — an agent never picks the connection, this module does.
 MONGO_CONNECTION_ID = "preconfigured"
 
-# Pinned on purpose: `npx -y` resolves to whatever is latest, and 2.0 made
-# `connectionId` required while 3.0 is already in prerelease. Unpinned, the
-# server's tool schema changes underneath the application without warning.
+
 MONGO_MCP_SERVER_PACKAGE = "mongodb-mcp-server@2.1.0"
 
 IMPROVEMENT_PLAN_COLLECTION = "improvement_plan"
@@ -64,10 +40,10 @@ FIND_USER_MEMORY_DESCRIPTION = (
 
 
 def _configure_mcp_client(mongo_uri: str | None = None) -> MultiServerMCPClient:
-    """Build the MCP client for the MongoDB server, run over stdio via `npx`."""
+    """Build the configured stdio MCP client, validating required credentials."""
 
     if mongo_uri is None:
-        mongo_uri = os.environ.get(MONGO_URI_ENV_VAR, "")
+        mongo_uri = os.environ.get('MONGO_URI', "")
 
     if mongo_uri == "":
         raise RuntimeError(
@@ -92,21 +68,19 @@ def _configure_mcp_client(mongo_uri: str | None = None) -> MultiServerMCPClient:
     )
 
 
-# One session for the whole process, so a query no longer pays two `npx`
-# spawns (one to list the tools, one to call `find`) before it reaches Mongo.
 MONGO_SESSION = PersistentMCPSession("mongodb", lambda: _configure_mcp_client())
 
 
 def _call_mongo_tool(tool_name: str, **kwargs: Any) -> Any:
-    """Synchronous bridge: one MCP tool call over the shared session."""
+    """Invoke a MongoDB tool synchronously through the shared MCP session."""
 
     return MONGO_SESSION.call_tool(tool_name, **kwargs)
 
 
 def _database_name() -> str:
-    """The database every `find` is scoped to, from the environment."""
+    """Read the MongoDB database name from the environment and reject an empty value."""
 
-    database = os.environ.get(DB_NAME_ENV_VAR, "")
+    database = os.environ.get('DB_NAME', "")
     if database == "":
         raise RuntimeError("DB_NAME is not set. Please set it in the environment.")
 
@@ -114,13 +88,7 @@ def _database_name() -> str:
 
 
 def _parse_filter(filter_json: str | dict[str, Any] | None) -> dict[str, Any]:
-    """Turn the agent's filter input into the object the `find` tool takes.
-
-    Agents are asked for a JSON object string, but they also send a bare dict,
-    `None`, or whitespace — all of which mean "no filter". Anything else is
-    rejected with the text the agent actually sent, so it can correct itself
-    instead of seeing a bare `JSONDecodeError`.
-    """
+    """Accept a dictionary or JSON object filter, treating None and blank text as an empty filter."""
 
     if filter_json is None:
         return {}
@@ -167,7 +135,7 @@ def _find_user_memory(filter_json: str | dict[str, Any] | None = "") -> Any:
 
 
 def get_improvement_plan_tools() -> list[Tool]:
-    """`find`, pinned to `improvement_plan`, for agents that read improvement plans."""
+    """Return a read-only MongoDB search tool restricted to improvement plans."""
 
     return [
         Tool(
@@ -179,7 +147,7 @@ def get_improvement_plan_tools() -> list[Tool]:
 
 
 def get_user_memory_tools() -> list[Tool]:
-    """`find`, pinned to `user_memory`, for agents that read a user's memories."""
+    """Return a read-only MongoDB search tool restricted to user memories."""
 
     return [
         Tool(

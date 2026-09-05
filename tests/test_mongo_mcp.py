@@ -1,27 +1,10 @@
-"""Tests for the MongoDB MCP integration.
-
-`cmd/api/mcp/mongo_mcp.py` turns the MongoDB MCP server into LangChain tools
-the application can hand to Aeko. It stays free of any `aeko` import (see
-`test_only_the_entry_point_imports_the_sdk` in `test_e2e.py`): it only
-produces plain LangChain `Tool` objects; `cmd/api/main.py` is the one place
-that wraps them as `AekoTool` for `AekoMessenger.set_tools()`.
-
-Concerns, tested in isolation so a real `npx`/MongoDB MCP server is never
-needed:
-
-* `_configure_mcp_client` — builds the stdio client config, read-only, from
-  `MONGO_URI`. Pure, no I/O.
-* `_find_improvement_plan` / `_find_user_memory` — each tool's `func`: fetches
-  the MCP server's tools and runs `find` against a collection fixed in code,
-  never chosen by the agent. The MCP client is faked.
-* `get_improvement_plan_tools` / `get_user_memory_tools` — wrap those `func`s
-  as the LangChain `Tool` objects handed out to agents.
-"""
+"""Verify mongo mcp behavior and error handling."""
 
 import pytest
 from langchain_core.tools import Tool
 
-from cmd.api.mcp import mongo_mcp, mcp_session
+from cmd.api.integrations.mcp import mcp_session
+from cmd.api.integrations.mcp import mongo_mcp
 
 
 class FakeMCPTool:
@@ -34,6 +17,7 @@ class FakeMCPTool:
         self.calls = []
 
     async def ainvoke(self, kwargs):
+        """Record an asynchronous tool invocation and return its scripted response."""
         self.calls.append(kwargs)
         return self.result
 
@@ -61,12 +45,7 @@ class FakeSessionContext:
 
 
 class FakeMCPClient:
-    """Stands in for `MultiServerMCPClient`, whose session is now kept open.
-
-    The tools are no longer fetched per call: the session is opened once and
-    every later call reuses it, so what a test hands over is the session the
-    server would have given.
-    """
+    """Simulate a persistent MultiServerMCPClient session."""
 
     def __init__(self, tools):
         self._tools = tools
@@ -74,6 +53,7 @@ class FakeMCPClient:
         self.contexts = []
 
     def session(self, server_name):
+        """Provide a simulated MCP session context."""
         self.server_name = server_name
         context = FakeSessionContext(self._tools)
         self.contexts.append(context)
@@ -92,21 +72,17 @@ class RecordingMultiServerMCPClient:
 
 @pytest.fixture(autouse=True)
 def reset_recorder():
+    """Reset the MCP call recorder before each test."""
     RecordingMultiServerMCPClient.instances = []
     yield
 
 
 @pytest.fixture(autouse=True)
 def fresh_mcp_session(monkeypatch):
-    """No MCP session survives a test.
-
-    The real session is cached for the life of the process, which is the point
-    of it — but that would also leak one test's fake server into the next, so
-    it is closed on both sides of every test. `load_mcp_tools` is replaced
-    because the genuine one would speak MCP to the fake session.
-    """
+    """Replace the shared MCP session with an isolated session for the test."""
 
     async def load_tools(session, **kwargs):
+        """Return scripted tools for MCP session discovery."""
         return session.tools
 
     monkeypatch.setattr(mcp_session, "load_mcp_tools", load_tools)
@@ -115,10 +91,8 @@ def fresh_mcp_session(monkeypatch):
     mongo_mcp.MONGO_SESSION.close()
 
 
-# ---------------------------------------------------------------------------
-# _configure_mcp_client
-# ---------------------------------------------------------------------------
 def test_configure_mcp_client_wires_mongodb_over_stdio_read_only_with_the_given_uri(monkeypatch):
+    """Verify that configure mcp client wires mongodb over stdio read only with the given uri."""
     monkeypatch.setattr(mongo_mcp, "MultiServerMCPClient", RecordingMultiServerMCPClient)
 
     mongo_mcp._configure_mcp_client("mongodb://explicit-host:27017")
@@ -134,6 +108,7 @@ def test_configure_mcp_client_wires_mongodb_over_stdio_read_only_with_the_given_
 
 
 def test_configure_mcp_client_falls_back_to_the_mongo_uri_env_var(monkeypatch):
+    """Verify that configure mcp client falls back to the mongo uri env var."""
     monkeypatch.setattr(mongo_mcp, "MultiServerMCPClient", RecordingMultiServerMCPClient)
     monkeypatch.setenv("MONGO_URI", "mongodb://from-env:27017")
 
@@ -144,6 +119,7 @@ def test_configure_mcp_client_falls_back_to_the_mongo_uri_env_var(monkeypatch):
 
 
 def test_configure_mcp_client_raises_when_no_mongo_uri_is_available(monkeypatch):
+    """Verify that configure mcp client raises when no mongo uri is available."""
     monkeypatch.setattr(mongo_mcp, "MultiServerMCPClient", RecordingMultiServerMCPClient)
     monkeypatch.delenv("MONGO_URI", raising=False)
 
@@ -151,11 +127,8 @@ def test_configure_mcp_client_raises_when_no_mongo_uri_is_available(monkeypatch)
         mongo_mcp._configure_mcp_client("")
 
 
-# ---------------------------------------------------------------------------
-# _find_improvement_plan / _find_user_memory — collection is fixed in code,
-# never chosen by the agent; only the filter travels as input.
-# ---------------------------------------------------------------------------
 def test_find_improvement_plan_invokes_find_scoped_to_the_improvement_plan_collection(monkeypatch):
+    """Verify that find improvement plan invokes find scoped to the improvement plan collection."""
     find_tool = FakeMCPTool("find", result=[{"defined_problem": "flaring"}])
     monkeypatch.setattr(mongo_mcp, "_configure_mcp_client", lambda: FakeMCPClient([find_tool]))
     monkeypatch.setenv("DB_NAME", "aeko_test")
@@ -174,6 +147,7 @@ def test_find_improvement_plan_invokes_find_scoped_to_the_improvement_plan_colle
 
 
 def test_find_improvement_plan_defaults_to_an_empty_filter(monkeypatch):
+    """Verify that find improvement plan defaults to an empty filter."""
     find_tool = FakeMCPTool("find", result=[])
     monkeypatch.setattr(mongo_mcp, "_configure_mcp_client", lambda: FakeMCPClient([find_tool]))
     monkeypatch.setenv("DB_NAME", "aeko_test")
@@ -191,6 +165,7 @@ def test_find_improvement_plan_defaults_to_an_empty_filter(monkeypatch):
 
 
 def test_find_user_memory_invokes_find_scoped_to_the_user_memory_collection(monkeypatch):
+    """Verify that find user memory invokes find scoped to the user memory collection."""
     find_tool = FakeMCPTool("find", result=[{"field": "preferred_language"}])
     monkeypatch.setattr(mongo_mcp, "_configure_mcp_client", lambda: FakeMCPClient([find_tool]))
     monkeypatch.setenv("DB_NAME", "aeko_test")
@@ -209,6 +184,7 @@ def test_find_user_memory_invokes_find_scoped_to_the_user_memory_collection(monk
 
 
 def test_find_raises_a_clear_error_when_the_server_has_no_find_tool(monkeypatch):
+    """Verify that find raises a clear error when the server has no find tool."""
     other_tool = FakeMCPTool("aggregate")
     monkeypatch.setattr(mongo_mcp, "_configure_mcp_client", lambda: FakeMCPClient([other_tool]))
     monkeypatch.setenv("DB_NAME", "aeko_test")
@@ -218,6 +194,7 @@ def test_find_raises_a_clear_error_when_the_server_has_no_find_tool(monkeypatch)
 
 
 def test_find_raises_when_no_database_name_is_configured(monkeypatch):
+    """Verify that find raises when no database name is configured."""
     find_tool = FakeMCPTool("find", result=[])
     monkeypatch.setattr(mongo_mcp, "_configure_mcp_client", lambda: FakeMCPClient([find_tool]))
     monkeypatch.delenv("DB_NAME", raising=False)
@@ -228,35 +205,31 @@ def test_find_raises_when_no_database_name_is_configured(monkeypatch):
     assert find_tool.calls == []
 
 
-# ---------------------------------------------------------------------------
-# _parse_filter — agents send a JSON object string, but not always: a bare
-# dict, None and whitespace all mean "no filter"; anything else is rejected
-# with the text the agent sent instead of a bare JSONDecodeError.
-# ---------------------------------------------------------------------------
 @pytest.mark.parametrize("empty", [None, "", "   ", {}])
 def test_parse_filter_treats_empty_input_as_no_filter(empty):
+    """Verify that parse filter treats empty input as no filter."""
     assert mongo_mcp._parse_filter(empty) == {}
 
 
 def test_parse_filter_reads_a_json_object_string():
+    """Verify that parse filter reads a json object string."""
     assert mongo_mcp._parse_filter('{"id_user": "u1"}') == {"id_user": "u1"}
 
 
 def test_parse_filter_passes_a_dict_through():
+    """Verify that parse filter passes a dict through."""
     assert mongo_mcp._parse_filter({"id_user": "u1"}) == {"id_user": "u1"}
 
 
 @pytest.mark.parametrize("bad", ["{not json", "[1, 2]", '"a string"'])
 def test_parse_filter_rejects_anything_that_is_not_a_json_object(bad):
+    """Verify that parse filter rejects anything that is not a json object."""
     with pytest.raises(ValueError, match="JSON object string"):
         mongo_mcp._parse_filter(bad)
 
 
-# ---------------------------------------------------------------------------
-# get_improvement_plan_tools / get_user_memory_tools — one tool each,
-# collection-pinned.
-# ---------------------------------------------------------------------------
 def test_get_improvement_plan_tools_returns_a_single_find_tool():
+    """Verify that get improvement plan tools returns a single find tool."""
     tools = mongo_mcp.get_improvement_plan_tools()
 
     assert len(tools) == 1
@@ -266,6 +239,7 @@ def test_get_improvement_plan_tools_returns_a_single_find_tool():
 
 
 def test_get_improvement_plan_tools_entry_is_backed_by_find_improvement_plan(monkeypatch):
+    """Verify that get improvement plan tools entry is backed by find improvement plan."""
     find_tool = FakeMCPTool("find", result="improvement plan results")
     monkeypatch.setattr(mongo_mcp, "_configure_mcp_client", lambda: FakeMCPClient([find_tool]))
     monkeypatch.setenv("DB_NAME", "aeko_test")
@@ -276,6 +250,7 @@ def test_get_improvement_plan_tools_entry_is_backed_by_find_improvement_plan(mon
 
 
 def test_get_user_memory_tools_returns_a_single_find_tool():
+    """Verify that get user memory tools returns a single find tool."""
     tools = mongo_mcp.get_user_memory_tools()
 
     assert len(tools) == 1
@@ -285,6 +260,7 @@ def test_get_user_memory_tools_returns_a_single_find_tool():
 
 
 def test_get_user_memory_tools_entry_is_backed_by_find_user_memory(monkeypatch):
+    """Verify that get user memory tools entry is backed by find user memory."""
     find_tool = FakeMCPTool("find", result="user memory results")
     monkeypatch.setattr(mongo_mcp, "_configure_mcp_client", lambda: FakeMCPClient([find_tool]))
     monkeypatch.setenv("DB_NAME", "aeko_test")

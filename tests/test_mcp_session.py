@@ -1,23 +1,4 @@
-"""Tests for the MCP session shared by every tool call.
-
-`cmd/api/mcp/mcp_session.py` exists because `MultiServerMCPClient` opens a new
-session — and therefore spawns the server again — for every single tool call.
-Measured against the real Chroma server that cost 103 seconds for a query whose
-search takes two, so the session is opened once and kept open.
-
-No real server is ever spawned here: the client, its session and the tools on
-it are all faked, and `load_mcp_tools` is replaced because the genuine one
-would try to speak MCP to a fake session.
-
-What is worth pinning down:
-
-* the session is opened once, however many calls go through it;
-* a call that never answers raises instead of hanging — the failure this whole
-  module was written to remove;
-* a session that has died is rebuilt rather than being handed to the caller;
-* closing ends the server process, which otherwise outlives the application
-  still holding the model it loaded.
-"""
+"""Verify mcp session behavior and error handling."""
 
 import asyncio
 import threading
@@ -25,8 +6,8 @@ import time
 
 import pytest
 
-from cmd.api.mcp import mcp_session
-from cmd.api.mcp.mcp_session import MCPSessionError, PersistentMCPSession
+from cmd.api.integrations.mcp import mcp_session
+from cmd.api.integrations.mcp.mcp_session import MCPSessionError, PersistentMCPSession
 
 
 class FakeTool:
@@ -40,6 +21,7 @@ class FakeTool:
         self.calls = []
 
     async def ainvoke(self, kwargs):
+        """Record an asynchronous tool invocation and return its scripted response."""
         self.calls.append(kwargs)
         if self.hangs:
             await asyncio.sleep(30)
@@ -66,6 +48,7 @@ class FakeClient:
         self.closed = 0
 
     def session(self, server_name):
+        """Provide a simulated MCP session context."""
         self.server_names.append(server_name)
         return FakeSessionContext(self)
 
@@ -91,21 +74,23 @@ class FakeSessionContext:
 
 @pytest.fixture(autouse=True)
 def fake_tool_loading(monkeypatch):
-    """The real `load_mcp_tools` would send MCP messages to a fake session."""
+    """Replace MCP tool discovery with scripted tools."""
 
     async def load_tools(session, **kwargs):
+        """Return scripted tools for MCP session discovery."""
         return session.tools
 
     monkeypatch.setattr(mcp_session, "load_mcp_tools", load_tools)
 
 
 def build_session(*clients, **kwargs):
-    """A session over a queue of clients — one per time it has to reopen."""
+    """Build a session fixture with configurable dependencies."""
 
     remaining = list(clients)
     built = []
 
     def build_client():
+        """Build a test client or client double with the supplied dependencies."""
         client = remaining.pop(0) if remaining else built[-1]
         built.append(client)
         return client
@@ -117,18 +102,15 @@ def build_session(*clients, **kwargs):
 
 @pytest.fixture
 def closing():
-    """Every session in this module is closed, pass or fail."""
+    """Close the test session after use."""
     sessions = []
     yield sessions.append
     for session in sessions:
         session.close()
 
 
-# ---------------------------------------------------------------------------
-# One session, reused
-# ---------------------------------------------------------------------------
 def test_the_session_is_opened_once_and_reused_by_every_call(closing):
-    """The whole point: the server is spawned once, not once per call."""
+    """Verify that the session is opened once and reused by every call."""
     tool = FakeTool("search", result="ok")
     client = FakeClient([tool])
     session = build_session(client)
@@ -142,6 +124,7 @@ def test_the_session_is_opened_once_and_reused_by_every_call(closing):
 
 
 def test_call_tool_returns_what_the_tool_returned(closing):
+    """Verify that call tool returns what the tool returned."""
     client = FakeClient([FakeTool("search", result={"documents": [["biogas"]]})])
     session = build_session(client)
     closing(session)
@@ -150,7 +133,7 @@ def test_call_tool_returns_what_the_tool_returned(closing):
 
 
 def test_the_session_is_opened_under_the_configured_server_name(closing):
-    """The name has to match the key in the client's connection config."""
+    """Verify that the session is opened under the configured server name."""
     client = FakeClient([FakeTool("search", result="ok")])
     session = build_session(client)
     closing(session)
@@ -161,7 +144,7 @@ def test_the_session_is_opened_under_the_configured_server_name(closing):
 
 
 def test_start_opens_the_session_without_calling_anything(closing):
-    """What the application calls at start-up, to pay the cold start there."""
+    """Verify that start opens the session without calling anything."""
     client = FakeClient([FakeTool("search", result="ok")])
     session = build_session(client)
     closing(session)
@@ -172,10 +155,11 @@ def test_start_opens_the_session_without_calling_anything(closing):
 
 
 def test_the_client_is_built_only_when_the_session_opens(closing):
-    """A missing credential must still be reported by the call that needs it."""
+    """Verify that the client is built only when the session opens."""
     built = []
 
     def build_client():
+        """Build a test client or client double with the supplied dependencies."""
         built.append(1)
         raise RuntimeError("TAVILY_API_KEY is not set.")
 
@@ -187,10 +171,8 @@ def test_the_client_is_built_only_when_the_session_opens(closing):
         session.call_tool("search")
 
 
-# ---------------------------------------------------------------------------
-# Failures the agent has to be able to read
-# ---------------------------------------------------------------------------
 def test_an_unknown_tool_names_the_ones_the_server_does_expose(closing):
+    """Verify that an unknown tool names the ones the server does expose."""
     client = FakeClient([FakeTool("tavily_map"), FakeTool("tavily_search")])
     session = build_session(client)
     closing(session)
@@ -200,6 +182,7 @@ def test_an_unknown_tool_names_the_ones_the_server_does_expose(closing):
 
 
 def test_a_server_that_never_comes_up_says_so(closing):
+    """Verify that a server that never comes up says so."""
     client = FakeClient([], fails_to_open=OSError("npx not found"))
     session = build_session(client)
     closing(session)
@@ -209,7 +192,7 @@ def test_a_server_that_never_comes_up_says_so(closing):
 
 
 def test_a_call_that_never_answers_raises_instead_of_hanging(closing):
-    """The failure this module exists to remove: no answer, and no error."""
+    """Verify that a call that never answers raises instead of hanging."""
     client = FakeClient([FakeTool("search", hangs=True)])
     session = build_session(client, call_timeout=0.1)
     closing(session)
@@ -219,6 +202,7 @@ def test_a_call_that_never_answers_raises_instead_of_hanging(closing):
 
 
 def test_a_call_that_kept_failing_reports_the_last_error(closing):
+    """Verify that a call that kept failing reports the last error."""
     broken = FakeClient([FakeTool("search", fails_with=ConnectionError("pipe closed"))])
     session = build_session(broken, broken)
     closing(session)
@@ -227,11 +211,8 @@ def test_a_call_that_kept_failing_reports_the_last_error(closing):
         session.call_tool("search")
 
 
-# ---------------------------------------------------------------------------
-# A dead session is rebuilt, not handed to the caller
-# ---------------------------------------------------------------------------
 def test_a_failed_call_is_retried_once_on_a_fresh_session(closing):
-    """The server can be killed from outside at any moment."""
+    """Verify that a failed call is retried once on a fresh session."""
     dead = FakeClient([FakeTool("search", fails_with=ConnectionError("pipe closed"))])
     healthy = FakeClient([FakeTool("search", result="ok")])
     session = build_session(dead, healthy)
@@ -242,7 +223,7 @@ def test_a_failed_call_is_retried_once_on_a_fresh_session(closing):
 
 
 def test_a_dropped_session_is_replaced_on_the_next_call(closing):
-    """After a timeout the session is gone; the next call starts a new server."""
+    """Verify that a dropped session is replaced on the next call."""
     stuck = FakeClient([FakeTool("search", hangs=True)])
     healthy = FakeClient([FakeTool("search", result="ok")])
     session = build_session(stuck, healthy, call_timeout=0.1)
@@ -255,7 +236,7 @@ def test_a_dropped_session_is_replaced_on_the_next_call(closing):
 
 
 def test_running_on_a_session_closed_underneath_reports_it(closing):
-    """Another thread may close the session between resolving and running."""
+    """Verify that running on a session closed underneath reports it."""
     session = build_session(FakeClient([FakeTool("search", result="ok")]))
     closing(session)
     session.start()
@@ -269,10 +250,8 @@ def test_running_on_a_session_closed_underneath_reports_it(closing):
         coroutine.close()
 
 
-# ---------------------------------------------------------------------------
-# Closing — the server process must not outlive the application
-# ---------------------------------------------------------------------------
 def test_closing_leaves_the_session_and_the_server_behind():
+    """Verify that closing leaves the session and the server behind."""
     client = FakeClient([FakeTool("search", result="ok")])
     session = build_session(client)
     session.start()
@@ -283,18 +262,18 @@ def test_closing_leaves_the_session_and_the_server_behind():
 
 
 def test_closing_survives_a_server_that_fails_on_the_way_out():
-    """Shutdown must not be derailed by a child that is already broken."""
+    """Verify that closing survives a server that fails on the way out."""
     client = FakeClient([FakeTool("search", result="ok")], fails_to_close=OSError("broken pipe"))
     session = build_session(client)
     session.start()
 
-    session.close()  # must not raise
+    session.close()
 
     assert client.closed == 1
 
 
 def test_closing_gives_up_on_a_server_that_will_not_shut_down():
-    """Shutdown must finish even when the child ignores it."""
+    """Verify that closing gives up on a server that will not shut down."""
     client = FakeClient([FakeTool("search", result="ok")], hangs_on_close=True)
     session = build_session(client, close_timeout=0.1)
     session.start()
@@ -306,13 +285,14 @@ def test_closing_gives_up_on_a_server_that_will_not_shut_down():
 
 
 def test_closing_a_session_that_was_never_opened_does_nothing():
+    """Verify that closing a session that was never opened does nothing."""
     session = build_session(FakeClient([]))
 
-    session.close()  # must not raise
+    session.close()
 
 
 def test_closing_stops_the_thread_the_session_ran_on():
-    """A leaked loop thread would keep the child process alive with it."""
+    """Verify that closing stops the thread the session ran on."""
     session = build_session(FakeClient([FakeTool("search", result="ok")]))
     session.start()
     names = {thread.name for thread in threading.enumerate()}
@@ -329,6 +309,7 @@ def test_closing_stops_the_thread_the_session_ran_on():
 
 
 def test_a_closed_session_opens_a_new_one_when_called_again(closing):
+    """Verify that a closed session opens a new one when called again."""
     client = FakeClient([FakeTool("search", result="ok")])
     session = build_session(client)
     closing(session)

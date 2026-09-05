@@ -1,3 +1,5 @@
+"""Define the domain entities for improvement plans."""
+
 from datetime import datetime
 
 class ImprovementPlan:
@@ -12,9 +14,6 @@ class ImprovementPlan:
     def __init__(self, id: str | None = None, id_external_inventory: int | None = None, id_external_unit: int | None = None, defined_problem: str = "", method: str = "", reasoning: str = "", updated_at: datetime | None = None):
         self.id = id
         self.id_external_inventory = id_external_inventory
-        # The unit the inventory belongs to, which is what ties a plan to the
-        # ones written for the same place before it. The SDK never reads the
-        # database, so it cannot carry this: it is filled in by this API.
         self.id_external_unit = id_external_unit
         self.defined_problem = defined_problem
         self.method = method

@@ -1,3 +1,5 @@
+"""Expose HTTP endpoints and response models for users and memories."""
+
 from fastapi import APIRouter, Depends, HTTPException, Path, Request
 from pydantic import BaseModel, Field
 
@@ -17,6 +19,7 @@ class UserResponseData(BaseModel):
 
 
 def get_user_service(request: Request) -> IService:
+    """Build the user service from the application database, or raise HTTP 503."""
     database = request.app.state.db
     if database is None:
         raise HTTPException(status_code=503, detail="Database is not initialized")
@@ -50,6 +53,7 @@ def get_user(
     id_external_user: int = Path(..., description="External user identifier.", example=12345),
     service: IService = Depends(get_user_service),
 ) -> UserResponseData:
+    """Retrieve a user by external identifier."""
     try:
         user = service.get_mongo_user(id_external_user)
         return UserResponseData(

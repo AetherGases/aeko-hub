@@ -1,3 +1,5 @@
+"""Coordinate domain operations for improvement plans."""
+
 from improvement_plan.entity import ImprovementPlan
 from improvement_plan.improvement_plan import (
     IInventoryRepository,
@@ -5,23 +7,25 @@ from improvement_plan.improvement_plan import (
     IService,
     PREVIOUS_PLANS_FOR_CONTEXT,
 )
-from shared import current_id_request, record_aeko_metrics
+from internal.shared import current_id_request, record_aeko_metrics
 from user.user import IService as IUserService, UserMemory
 
 class Service(IService):
     def __init__(self, repository: IRepository, inventory_repository: IInventoryRepository):
         self.repository = repository
-        # The inventory lives in another microservice, so reading it is a
-        # second repository rather than a second method of the first one.
+
         self.inventory_repository = inventory_repository
 
     def get_by_id_external_inventory(self, id_external_inventory) -> ImprovementPlan:
+        """Retrieve the improvement plan associated with an external inventory identifier."""
         return self.repository.get_by_id_external_inventory(id_external_inventory)
 
     def get_last_by_id_external_unit(self, id_external_unit, limit) -> list[ImprovementPlan]:
+        """Retrieve the latest plans for an external unit, up to the requested limit."""
         return self.repository.get_last_by_id_external_unit(id_external_unit, limit)
 
     def create(self, improvement_plan: ImprovementPlan) -> ImprovementPlan:
+        """Persist an improvement plan and return the stored entity."""
         return self.repository.create(improvement_plan)
 
     def input_inventory(
@@ -32,9 +36,7 @@ class Service(IService):
         user_service: IUserService,
         aeko_inventory_analyzer_factory,
     ) -> ImprovementPlan:
-        # The plan is filed against the inventory it came from and stored under
-        # the unit it was written for, and the SDK never reads the database, so
-        # neither id can be derived downstream.
+        """Analyze an inventory with previous plans as context, then store its plan and user memory."""
         if id_external_inventory is None:
             raise ValueError("id_external_inventory is required to analyze an inventory.")
         if id_external_unit is None:
@@ -42,21 +44,13 @@ class Service(IService):
 
         inventory_markdown = self.inventory_repository.get_inventory_markdown(id_external_inventory)
 
-        # A fresh analyzer per report: `set_context()` is instance state, and a
-        # shared one would carry a unit's previous report into the next run.
         aeko_inventory_analyzer = aeko_inventory_analyzer_factory()
 
-        # Always called, even for a unit's first report: what the analysis
-        # builds on is a decision of this flow, and "nothing yet" is one of its
-        # answers rather than a step to skip.
         previous_plans = self.get_last_by_id_external_unit(
             id_external_unit, PREVIOUS_PLANS_FOR_CONTEXT
         )
         aeko_inventory_analyzer.set_context(_context_from(previous_plans))
 
-        # The same identifier the request is already tracked under, and the
-        # same recording the conversational flow does — an analysis is the
-        # other kind of run this API pays the SDK for.
         analysis = _analyze(
             aeko_inventory_analyzer,
             inventory_markdown,
@@ -82,12 +76,7 @@ class Service(IService):
         return improvement_plan
 
 def _analyze(analyzer, inventory_markdown: str, id_external_inventory: int, id_request: str):
-    """Run the analysis, and record what it cost even when it raised.
-
-    `analyze()` raises when the coordinator never writes the plan's three
-    sections, and the run it did make — every analyst before it included — is
-    exactly the one worth having recorded. The exception is re-raised untouched.
-    """
+    """Analyze an inventory and record metrics attached to any raised exception."""
 
     try:
         return analyzer.analyze(
@@ -101,15 +90,7 @@ def _analyze(analyzer, inventory_markdown: str, id_external_inventory: int, id_r
 
 
 def improvement_plan_from_aeko_plan(plan, id_external_unit: int) -> ImprovementPlan:
-    """Map an `AekoImprovementPlan` onto the document this API persists.
-
-    `_id` and `updated_at` are left to the database: the SDK hands back three
-    content fields the coordinator actually wrote, and nothing else about the
-    plan is its to decide. The unit comes from the request instead of from the
-    SDK for the same reason — it reads no database, and was never told which
-    unit the inventory belongs to. Since 3.x the plan arrives inside an
-    `AekoAnalysisResponse`, beside what producing it cost — read off `.plan`.
-    """
+    """Map an SDK plan and external unit identifier to a domain plan for persistence."""
     return ImprovementPlan(
         id=None,
         id_external_inventory=plan.id_external_inventory,
@@ -121,13 +102,7 @@ def improvement_plan_from_aeko_plan(plan, id_external_unit: int) -> ImprovementP
     )
 
 def _context_from(previous_plans: list[ImprovementPlan]) -> str:
-    """Render a unit's previous plans as the free-form text `set_context()` takes.
-
-    Most recent first, which is the order they were read in: the last report is
-    what this one builds on, and the one before it is what that one already
-    answered. A unit with no history renders to an empty string — the call
-    still happens, and the SDK reads that as no previous report.
-    """
+    """Render previous plans in retrieval order as analysis context, or empty text when absent."""
     return "\n\n".join(
         "\n".join(
             [

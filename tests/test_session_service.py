@@ -1,11 +1,4 @@
-"""Unit tests for the session service business rules.
-
-The service orchestrates the session repository and the two SDK factories it
-receives by injection. Every collaborator is replaced by a local double, so
-the rules under test are the service ones: session creation and naming, the
-message allowance, the ownership check, the documents handed to the SDK, and
-the persistence of an approved turn.
-"""
+"""Verify session service behavior and error handling."""
 
 import inspect
 from datetime import datetime, timedelta
@@ -15,27 +8,21 @@ import pytest
 from session.entity import Message, Session
 from session.service import Service
 from session.session import GuardrailRejectedError, IService
-from shared.event_tracking import bind_id_request, set_aeko_metrics_sink, unbind_id_request
+from internal.shared.event_tracking import bind_id_request, set_aeko_metrics_sink, unbind_id_request
 from user.entity import User, UserMemory
 
 ID_SESSION = "s1"
 ID_USER = "u1"
 SUBMITTED_AT = datetime(2026, 7, 26, 14, 30, 0)
 
-# What the tracking of a turn neither reviewer approved says about it. The
-# service never sees the SDK exception itself: `cmd/api/main.py` translates it
-# into `GuardrailRejectedError` at the boundary, which is what the stub below
-# raises.
+
 REVIEW_FAILURE = "no answer approved by the output guardrail or the response checker"
 
 USER = User(id=ID_USER, id_external_user=12345, role="analyst", usecase="report_generation")
 
 
 class StubTurn:
-    """One entry of `session.messages`, as `AekoMessageResponse.message`.
-
-    Three fields since 3.1: what the turn cost moved to the request's tracking.
-    """
+    """One entry of `session.messages`, as `AekoMessageResponse.message`."""
 
     def __init__(self, input, output, submitted_at=None):
         self.input = input
@@ -76,12 +63,11 @@ class StubMessenger:
         self.sent = []
 
     def send_message(self, message, session, *, id_request):
+        """Record the conversation call and return or raise its scripted result."""
         self.sent.append((message, session, id_request))
         if self.error is not None:
             raise self.error
 
-        # A turn nobody approved arrives already translated, carrying the
-        # tracking of the run that was made anyway.
         if not self.approved:
             rejection = GuardrailRejectedError(REVIEW_FAILURE)
             rejection.aeko_metrics = StubMetrics(
@@ -114,6 +100,7 @@ class StubMessengerFactory:
 
     @property
     def last(self):
+        """Return the most recently created test instance."""
         return self.built[-1]
 
 
@@ -138,6 +125,7 @@ class StubSessionFactory:
 
     @property
     def last(self):
+        """Return the most recently created test instance."""
         return self.built[-1]
 
 
@@ -156,10 +144,12 @@ class FakeSessionRepository:
             raise self.error
 
     def get_user_sessions(self, id_user):
+        """Retrieve the sessions belonging to a user."""
         self._guard()
         return [session for session in self.sessions.values() if session.id_user == id_user]
 
     def get_session(self, id_session):
+        """Retrieve a session by its internal identifier."""
         self._guard()
         session = self.sessions.get(id_session)
         if session is None:
@@ -167,14 +157,17 @@ class FakeSessionRepository:
         return session
 
     def get_session_messages(self, id_session):
+        """Retrieve the stored messages for a session."""
         self._guard()
         return self.messages.get(id_session, [])
 
     def get_session_messages_count(self, id_session):
+        """Return the number of messages stored in a session."""
         self._guard()
         return self.messages_count
 
     def create_session(self, id_user, user_repository):
+        """Create an empty session for an existing user and return its identifier."""
         self._guard()
         self.created_for.append((id_user, user_repository))
         id_session = f"session-{len(self.sessions) + 1}"
@@ -182,10 +175,12 @@ class FakeSessionRepository:
         return id_session
 
     def save_message(self, id_session, message):
+        """Append a message to the session and update its modification timestamp."""
         self._guard()
         self.saved.append((id_session, message))
 
     def update_name(self, id_session, name):
+        """Update the session name and modification timestamp."""
         self._guard()
         self.names[id_session] = name
 
@@ -196,26 +191,31 @@ class StubUserRepository:
         self.memories = list(memories or [])
 
     def get_user(self, id_external_user):
+        """Retrieve a user by external identifier."""
         return self.user
 
     def get_user_by_id(self, id_user):
+        """Retrieve a user by internal identifier, returning None when absent."""
         return self.user
 
     def get_user_memories(self, id_user):
+        """Retrieve the memories stored for a user."""
         return self.memories
 
     def create_user_memory(self, user_memory):
+        """Persist a memory associated with a user."""
         self.memories.append(user_memory)
 
 
 def build_service(**kwargs):
+    """Build a domain service with configurable repository doubles."""
     repository = FakeSessionRepository(**kwargs)
     return Service(repository), repository
 
 
 @pytest.fixture
 def recorded_metrics():
-    """Everything the service hands to the `aeko_metrics` sink, in order."""
+    """Capture SDK run metrics for the duration of the test."""
     metrics = []
     set_aeko_metrics_sink(metrics.append)
     yield metrics
@@ -223,13 +223,14 @@ def recorded_metrics():
 
 
 def failing_messengers(error):
-    """A factory whose SDK raises, carrying the run's tracking on the way out."""
+    """Build messengers that raise the configured exception."""
     error.aeko_metrics = StubMetrics(error_description=f"{type(error).__name__}: {error}")
     return StubMessengerFactory(error=error)
 
 
 def send(service, id_session=ID_SESSION, input="hi", id_user=ID_USER,
          messengers=None, sessions=None, users=None):
+    """Send or capture the request messages used by the test."""
     return service.send_message(
         id_session,
         input,
@@ -240,15 +241,14 @@ def send(service, id_session=ID_SESSION, input="hi", id_user=ID_USER,
     )
 
 
-# ---------------------------------------------------------------------------
-# Interface compatibility
-# ---------------------------------------------------------------------------
 def test_service_implements_the_service_interface():
+    """Verify that service implements the service interface."""
     assert issubclass(Service, IService)
     assert Service.__abstractmethods__ == frozenset()
 
 
 def test_send_message_signature_matches_the_interface():
+    """Verify that send message signature matches the interface."""
     interface = inspect.signature(IService.send_message).parameters
     implementation = inspect.signature(Service.send_message).parameters
 
@@ -258,10 +258,8 @@ def test_send_message_signature_matches_the_interface():
     assert "user_repository" in interface
 
 
-# ---------------------------------------------------------------------------
-# get_user_sessions / get_session_messages
-# ---------------------------------------------------------------------------
 def test_get_user_sessions_delegates_to_the_repository():
+    """Verify that get user sessions delegates to the repository."""
     service, _ = build_service()
 
     sessions = service.get_user_sessions(ID_USER)
@@ -270,6 +268,7 @@ def test_get_user_sessions_delegates_to_the_repository():
 
 
 def test_get_user_sessions_propagates_value_error():
+    """Verify that get user sessions propagates value error."""
     service, _ = build_service(error=ValueError("No sessions found."))
 
     with pytest.raises(ValueError, match="No sessions found."):
@@ -277,6 +276,7 @@ def test_get_user_sessions_propagates_value_error():
 
 
 def test_get_user_sessions_wraps_unexpected_errors():
+    """Verify that get user sessions wraps unexpected errors."""
     service, _ = build_service(error=OSError("mongo down"))
 
     with pytest.raises(RuntimeError, match="mongo down"):
@@ -284,12 +284,14 @@ def test_get_user_sessions_wraps_unexpected_errors():
 
 
 def test_get_session_messages_delegates_to_the_repository():
+    """Verify that get session messages delegates to the repository."""
     service, _ = build_service()
 
     assert service.get_session_messages(ID_SESSION) == []
 
 
 def test_get_session_messages_propagates_value_error():
+    """Verify that get session messages propagates value error."""
     service, _ = build_service(error=ValueError("Invalid session."))
 
     with pytest.raises(ValueError, match="Invalid session."):
@@ -297,16 +299,15 @@ def test_get_session_messages_propagates_value_error():
 
 
 def test_get_session_messages_wraps_unexpected_errors():
+    """Verify that get session messages wraps unexpected errors."""
     service, _ = build_service(error=OSError("mongo down"))
 
     with pytest.raises(RuntimeError, match="mongo down"):
         service.get_session_messages(ID_SESSION)
 
 
-# ---------------------------------------------------------------------------
-# send_message — the exchange
-# ---------------------------------------------------------------------------
 def test_send_message_returns_the_exchange():
+    """Verify that send message returns the exchange."""
     service, _ = build_service()
 
     message = send(service, input="What is scope 3?")
@@ -317,7 +318,7 @@ def test_send_message_returns_the_exchange():
 
 
 def test_send_message_reads_the_turn_out_of_the_response_message():
-    """The turn is nested under `.message`, not flattened on the response."""
+    """Verify that send message reads the turn out of the response message."""
     messengers = StubMessengerFactory(turn=StubTurn(input="hi", output="ho"))
     service, _ = build_service()
 
@@ -327,20 +328,21 @@ def test_send_message_reads_the_turn_out_of_the_response_message():
 
 
 def test_a_stored_turn_is_only_what_it_said_and_when():
-    """3.1 moved the cost of a turn to the request's tracking; the collection
-    keeps the exchange itself."""
+    """Verify that a stored turn is only what it said and when."""
     message = send(build_service()[0])
 
     assert set(vars(message)) == {"input", "output", "submitted_at"}
 
 
 def test_send_message_stamps_the_exchange_when_the_turn_carries_no_time():
+    """Verify that send message stamps the exchange when the turn carries no time."""
     service, _ = build_service()
 
     assert isinstance(send(service).submitted_at, datetime)
 
 
 def test_send_message_keeps_the_submission_time_the_sdk_produced():
+    """Verify that send message keeps the submission time the sdk produced."""
     messengers = StubMessengerFactory(turn=StubTurn(input="hi", output="ho", submitted_at=SUBMITTED_AT))
     service, _ = build_service()
 
@@ -348,6 +350,7 @@ def test_send_message_keeps_the_submission_time_the_sdk_produced():
 
 
 def test_send_message_persists_the_exchange():
+    """Verify that send message persists the exchange."""
     service, repository = build_service()
 
     message = send(service)
@@ -355,10 +358,8 @@ def test_send_message_persists_the_exchange():
     assert repository.saved == [(ID_SESSION, message)]
 
 
-# ---------------------------------------------------------------------------
-# send_message — what the SDK is handed
-# ---------------------------------------------------------------------------
 def test_send_message_builds_the_messenger_for_the_asking_user():
+    """Verify that send message builds the messenger for the asking user."""
     messengers = StubMessengerFactory()
     service, _ = build_service()
 
@@ -368,6 +369,7 @@ def test_send_message_builds_the_messenger_for_the_asking_user():
 
 
 def test_send_message_hands_over_the_session_and_the_text():
+    """Verify that send message hands over the session and the text."""
     messengers, sessions = StubMessengerFactory(), StubSessionFactory()
     service, _ = build_service()
 
@@ -380,6 +382,7 @@ def test_send_message_hands_over_the_session_and_the_text():
 
 
 def test_send_message_rehydrates_the_conversation_into_the_session():
+    """Verify that send message rehydrates the conversation into the session."""
     stored = Message(
         input="Summarize this session.",
         output="Here is the summary.",
@@ -394,6 +397,7 @@ def test_send_message_rehydrates_the_conversation_into_the_session():
 
 
 def test_send_message_hands_over_only_the_memories_that_are_still_valid():
+    """Verify that send message hands over only the memories that are still valid."""
     valid = UserMemory(id="m1", id_user=ID_USER, field="preferred_language", description="pt-BR")
     expiring = UserMemory(
         id="m2", id_user=ID_USER, field="soon", description="still valid",
@@ -412,16 +416,15 @@ def test_send_message_hands_over_only_the_memories_that_are_still_valid():
 
 
 def test_send_message_rejects_an_unknown_user():
+    """Verify that send message rejects an unknown user."""
     service, _ = build_service()
 
     with pytest.raises(ValueError, match="does not exist"):
         send(service, users=StubUserRepository(user=None))
 
 
-# ---------------------------------------------------------------------------
-# send_message — session creation and naming
-# ---------------------------------------------------------------------------
 def test_send_message_creates_a_session_when_none_is_given():
+    """Verify that send message creates a session when none is given."""
     messengers, sessions = StubMessengerFactory(), StubSessionFactory()
     service, repository = build_service()
     users = StubUserRepository()
@@ -433,6 +436,7 @@ def test_send_message_creates_a_session_when_none_is_given():
 
 
 def test_send_message_names_a_brand_new_session_after_its_first_message():
+    """Verify that send message names a brand new session after its first message."""
     service, repository = build_service()
 
     send(service, id_session="", input="How do I cut boiler emissions?")
@@ -441,6 +445,7 @@ def test_send_message_names_a_brand_new_session_after_its_first_message():
 
 
 def test_send_message_shortens_a_long_first_message_into_the_session_name():
+    """Verify that send message shortens a long first message into the session name."""
     service, repository = build_service()
 
     send(service, id_session="", input="scope 1 " * 40)
@@ -451,6 +456,7 @@ def test_send_message_shortens_a_long_first_message_into_the_session_name():
 
 
 def test_send_message_does_not_rename_an_existing_session():
+    """Verify that send message does not rename an existing session."""
     service, repository = build_service()
 
     send(service)
@@ -458,12 +464,8 @@ def test_send_message_does_not_rename_an_existing_session():
     assert repository.names == {}
 
 
-# ---------------------------------------------------------------------------
-# send_message — the reviewers
-# ---------------------------------------------------------------------------
 def test_send_message_raises_when_no_reviewer_approved_a_draft():
-    """The rejection travels out as it arrived: not wrapped in the RuntimeError
-    every other failure of this method becomes, because it is not one."""
+    """Verify that send message raises when no reviewer approved a draft."""
     service, _ = build_service()
 
     with pytest.raises(GuardrailRejectedError):
@@ -471,6 +473,7 @@ def test_send_message_raises_when_no_reviewer_approved_a_draft():
 
 
 def test_send_message_persists_nothing_when_no_reviewer_approved_a_draft():
+    """Verify that send message persists nothing when no reviewer approved a draft."""
     service, repository = build_service()
 
     with pytest.raises(GuardrailRejectedError):
@@ -479,10 +482,8 @@ def test_send_message_persists_nothing_when_no_reviewer_approved_a_draft():
     assert repository.saved == []
 
 
-# ---------------------------------------------------------------------------
-# send_message — the allowance rules
-# ---------------------------------------------------------------------------
 def test_send_message_rejects_a_session_that_reached_the_message_limit():
+    """Verify that send message rejects a session that reached the message limit."""
     service, _ = build_service(messages_count=50)
 
     with pytest.raises(ValueError, match="maximum number of messages"):
@@ -490,6 +491,7 @@ def test_send_message_rejects_a_session_that_reached_the_message_limit():
 
 
 def test_send_message_accepts_a_session_below_the_message_limit():
+    """Verify that send message accepts a session below the message limit."""
     service, repository = build_service(messages_count=49)
 
     send(service)
@@ -498,6 +500,7 @@ def test_send_message_accepts_a_session_below_the_message_limit():
 
 
 def test_send_message_rejects_a_session_owned_by_another_user():
+    """Verify that send message rejects a session owned by another user."""
     service, _ = build_service()
 
     with pytest.raises(ValueError, match="not allowed"):
@@ -507,6 +510,7 @@ def test_send_message_rejects_a_session_owned_by_another_user():
 
 
 def test_send_message_propagates_a_value_error_from_the_repository():
+    """Verify that send message propagates a value error from the repository."""
     service, _ = build_service(error=ValueError("User with id_user u1 does not exist."))
 
     with pytest.raises(ValueError, match="does not exist"):
@@ -514,6 +518,7 @@ def test_send_message_propagates_a_value_error_from_the_repository():
 
 
 def test_send_message_wraps_unexpected_errors():
+    """Verify that send message wraps unexpected errors."""
     service, _ = build_service(error=OSError("mongo down"))
 
     with pytest.raises(RuntimeError, match="mongo down"):
@@ -521,34 +526,30 @@ def test_send_message_wraps_unexpected_errors():
 
 
 def test_send_message_wraps_an_sdk_failure():
+    """Verify that send message wraps an sdk failure."""
     service, _ = build_service()
 
     with pytest.raises(RuntimeError, match="gemini down"):
         send(service, messengers=StubMessengerFactory(error=OSError("gemini down")))
 
 
-# ---------------------------------------------------------------------------
-# _validate_session_and_user_allowance
-# ---------------------------------------------------------------------------
 def test_validation_returns_true_for_an_allowed_user():
+    """Verify that validation returns true for an allowed user."""
     service, _ = build_service()
 
     assert service._validate_session_and_user_allowance(ID_SESSION, ID_USER) is True
 
 
 def test_validation_wraps_unexpected_errors():
+    """Verify that validation wraps unexpected errors."""
     service, _ = build_service(error=OSError("mongo down"))
 
     with pytest.raises(RuntimeError, match="mongo down"):
         service._validate_session_and_user_allowance(ID_SESSION, ID_USER)
 
 
-# ---------------------------------------------------------------------------
-# send_message — the request's event tracking
-# ---------------------------------------------------------------------------
 def test_the_sdk_is_handed_the_identifier_the_request_is_tracked_under():
-    """Not one invented here: the row the SDK reports has to name the same
-    request the gateway already answered in `x-request-id`."""
+    """Verify that the sdk is handed the identifier the request is tracked under."""
     messengers = StubMessengerFactory()
     service, _ = build_service()
     token = bind_id_request("65a8b3d6c0f8e1d7f4b2c0aa")
@@ -563,7 +564,7 @@ def test_the_sdk_is_handed_the_identifier_the_request_is_tracked_under():
 
 
 def test_a_call_made_outside_a_request_still_reaches_the_sdk():
-    """With no request open there is no identifier, and the SDK takes that."""
+    """Verify that a call made outside a request still reaches the sdk."""
     messengers = StubMessengerFactory()
     service, _ = build_service()
 
@@ -573,6 +574,7 @@ def test_a_call_made_outside_a_request_still_reaches_the_sdk():
 
 
 def test_an_answered_turn_records_what_the_run_cost(recorded_metrics):
+    """Verify that an answered turn records what the run cost."""
     service, _ = build_service()
     token = bind_id_request("65a8b3d6c0f8e1d7f4b2c0aa")
 
@@ -586,9 +588,7 @@ def test_an_answered_turn_records_what_the_run_cost(recorded_metrics):
 
 
 def test_a_turn_no_reviewer_approved_is_recorded_as_the_failure_it_was(recorded_metrics):
-    """It delivers nothing, so the tracking is the only place that outcome is
-    written down — and it is written even though the exchange itself is never
-    persisted."""
+    """Verify that a turn no reviewer approved is recorded as the failure it was."""
     service, repository = build_service()
 
     with pytest.raises(GuardrailRejectedError):
@@ -600,6 +600,7 @@ def test_a_turn_no_reviewer_approved_is_recorded_as_the_failure_it_was(recorded_
 
 
 def test_a_run_that_raised_records_the_tracking_it_carried_out(recorded_metrics):
+    """Verify that a run that raised records the tracking it carried out."""
     service, _ = build_service()
 
     with pytest.raises(RuntimeError, match="gemini down"):
@@ -609,7 +610,7 @@ def test_a_run_that_raised_records_the_tracking_it_carried_out(recorded_metrics)
 
 
 def test_a_failure_carrying_no_tracking_records_nothing(recorded_metrics):
-    """An error raised before the run started has none to report."""
+    """Verify that a failure carrying no tracking records nothing."""
     service, _ = build_service()
 
     with pytest.raises(RuntimeError, match="gemini down"):
@@ -619,7 +620,9 @@ def test_a_failure_carrying_no_tracking_records_nothing(recorded_metrics):
 
 
 def test_a_recording_that_fails_never_takes_the_exchange_down():
+    """Verify that a recording that fails never takes the exchange down."""
     def explode(metrics):
+        """Raise the configured failure to exercise error handling."""
         raise RuntimeError("mongo is down")
 
     service, _ = build_service()
