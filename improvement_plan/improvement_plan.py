@@ -21,6 +21,20 @@ from user.user import IService as IUserService
 # and the one before it, in that order.
 PREVIOUS_PLANS_FOR_CONTEXT = 2
 
+
+class MalformedPlanError(Exception):
+    """Raised when the analysis came back without a plan to store.
+
+    The report flow passes neither reviewer of the chat flow, but the
+    `Coordenador de Melhoria Continua` still has to write the plan under its
+    three headings, and four rewrites is as far as the SDK goes. It arrives as
+    `MalformedAgentOutputError` and is translated by `cmd/api/main.py`, the one
+    file that may know that name.
+
+    The sibling of `session.session.GuardrailRejectedError`: a run that was
+    made and paid for, leaving nothing this API can persist.
+    """
+
 class IRepository(ABC):
     @abstractmethod
     def get_by_id_external_inventory(self, id_external_inventory) -> ImprovementPlan:

@@ -73,18 +73,13 @@ class Service(IService):
                 messenger, input, aeko_session_factory(session), current_id_request()
             )
 
-            # Recorded before the guardrail is checked below, so a turn nobody
-            # was answered with still leaves the row that says so.
             record_aeko_metrics(response.aeko_metrics)
 
+            # There is an answer here or there is no response at all: since SDK
+            # 3.2 a turn no reviewer approved raises instead of coming back
+            # empty, and `_run()` below is where that outcome leaves — with the
+            # row saying so already recorded.
             message = _internal_message_from_aeko_message(response.message)
-
-            # A run the guardrail never approved answers with an empty output.
-            # That is a successful run with nothing to persist.
-            if not message.output:
-                raise GuardrailRejectedError(
-                    "The output guardrail rejected every draft. Please rephrase."
-                )
 
             self.repository.save_message(id_session, message)
 
@@ -117,8 +112,10 @@ def _run(messenger, input: str, session, id_request: str):
 
     A failed run carries its tracking out on the exception — there is no
     response left to carry it — and a request that failed is the one worth
-    having recorded. The exception itself is re-raised untouched: this observes
-    the run, it does not change what one does.
+    having recorded. A turn no reviewer approved is one of those since SDK 3.2,
+    and reaches here as `GuardrailRejectedError`, already translated by
+    `cmd/api/main.py`. The exception itself is re-raised untouched: this
+    observes the run, it does not change what one does.
     """
 
     try:

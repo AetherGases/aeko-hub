@@ -5,7 +5,7 @@ environment. `conftest.py` registers this module under the name `aeko`
 in `sys.modules` before any application module is imported, so production
 code keeps its plain `from aeko import ...` at the entry point.
 
-Everything here mirrors the 3.1 README field for field: the DTOs are the same
+Everything here mirrors the 3.2 README field for field: the DTOs are the same
 Pydantic models over the same MongoDB collections, `Aeko.config()` and
 `AekoMessenger.set_tools()` write to one process-wide runtime, and
 `send_message()` updates the `AekoSession` it is handed in place. What is faked
@@ -19,6 +19,12 @@ to the exception when there is not. A turn no longer carries what it cost:
 `AekoMessage` is `input`, `output` and `submitted_at`, and the tokens live per
 agent invocation on the tracking.
 
+Since 3.2 there is a ninth agent, `Verificador de Resposta`, and a turn that
+neither reviewer approved *raises* `MalformedAgentOutputError` instead of
+answering with an empty output — which is the contract the API is held to
+here: nothing is delivered, nothing is appended to the session, and the run's
+tracking leaves on the exception.
+
 Every fake records the calls it receives so tests can assert that the API
 wires the SDK correctly (configuration at startup, DTOs per request).
 """
@@ -29,7 +35,7 @@ from typing import Any, Sequence
 
 from pydantic import BaseModel, ConfigDict, Field
 
-__version__ = "3.1.0"
+__version__ = "3.2.0"
 
 # The routing keys of the agent graph, exactly as the README spells them,
 # accents included.
@@ -38,6 +44,9 @@ AGENT_NAMES: tuple[str, ...] = (
     "FAQ",
     "Orquestrador",
     "Guardrail de Saída",
+    # The ninth agent, added in 3.2: the last word of the chat flow, after
+    # the guardrail it does not replace.
+    "Verificador de Resposta",
     "Análista de inventários",
     "Analista de Poluentes",
     "Analista de Gases Verdes",
@@ -68,10 +77,11 @@ def _now() -> datetime:
 CONVERSATIONAL_FLOW = "conversational"
 ANALYTICAL_FLOW = "analytical"
 
-# What a turn the output guardrail never approved reports as its failure. It
-# returns normally and delivers nothing, so the tracking is the only place that
-# outcome is written down.
-GUARDRAIL_FAILURE = "no answer approved by the output guardrail"
+# What a turn neither reviewer approved reports as its failure — the message of
+# the `MalformedAgentOutputError` it raises since 3.2, and the description on
+# the tracking that leaves with it. The run happened and was paid for, so that
+# tracking is the only place the outcome is written down.
+REVIEW_FAILURE = "no answer approved by the output guardrail or the response checker"
 
 
 class AekoAgentMetrics(BaseModel):
@@ -426,29 +436,42 @@ class AekoMessenger:
         if output is None:
             output = f"echo: {message}" if type(self).next_approved else ""
 
+        # Since 3.2 a turn neither the guardrail nor the response checker
+        # approved has no response at all: there is nothing to deliver, nothing
+        # to append to the session, and the tracking leaves on the exception.
+        if not output:
+            raise _fail_with(
+                MalformedAgentOutputError(REVIEW_FAILURE),
+                _tracking(
+                    id_request,
+                    CONVERSATIONAL_FLOW,
+                    type(self).next_agents,
+                    REVIEW_FAILURE,
+                    type(self).next_latency,
+                ),
+            )
+
         turn = AekoMessage(input=message, output=output)
 
         # Only a final result is recorded: a rejected draft never becomes
         # context for the next question.
-        if output:
-            session.messages.append(turn)
-            session.updated_at = turn.submitted_at
+        session.messages.append(turn)
+        session.updated_at = turn.submitted_at
 
         return AekoMessageResponse(
             message=turn,
-            # A turn the guardrail never approved returns normally and delivers
-            # nothing, so the tracking is where that failure is written down.
             aeko_metrics=_tracking(
                 id_request,
                 CONVERSATIONAL_FLOW,
                 type(self).next_agents,
-                None if output else GUARDRAIL_FAILURE,
+                None,
                 type(self).next_latency,
             ),
             id_session=session.id,
             id_user=session.id_user,
             agents_called=list(type(self).next_agents),
-            approved=bool(output) and type(self).next_approved,
+            # A response that exists is a response both reviewers approved.
+            approved=True,
             guardrail_retries=type(self).next_guardrail_retries,
         )
 

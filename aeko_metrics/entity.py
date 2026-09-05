@@ -1,9 +1,9 @@
 class AgentMetric:
     """What one agent *invocation* of a run consumed.
 
-    One entry per call, not per agent: the output guardrail sends a draft back
-    and the graph runs the same agents again, and a turn that paid for four
-    routings is not a turn that paid for one. Collapsing them by name would
+    One entry per call, not per agent: a reviewer sends a draft back and the
+    graph runs the same agents again, and a turn that paid for four routings
+    is not a turn that paid for one. Collapsing them by name would
     turn the retry loop — the single most expensive thing that can happen to a
     request — into the one thing the rows cannot show.
     """

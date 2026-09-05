@@ -130,7 +130,7 @@ def get_session_messages(
             },
         },
         400: {"description": "The request body is missing required fields or is invalid."},
-        502: {"description": "The output guardrail rejected every draft, so the run produced no answer."},
+        502: {"description": "Neither the output guardrail nor the response checker approved a draft, so the run produced no answer."},
         500: {"description": "The Aeko SDK is not initialized or an unexpected error occurred."},
     },
     openapi_extra={
@@ -188,8 +188,8 @@ async def send_message(
         raise HTTPException(status_code=500, detail="Aeko SDK is not initialized")
 
     try:
-        # A run is several model calls long, and more when the guardrail sends a
-        # draft back, so it never runs on the event loop.
+        # A run is several model calls long, and more when either reviewer
+        # sends a draft back, so it never runs on the event loop.
         message = await run_in_threadpool(
             service.send_message,
             id_session,

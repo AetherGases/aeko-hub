@@ -26,11 +26,13 @@ from aeko_metrics.service import Service as AekoMetricsService
 from hub_metrics.database.repository import Repository as HubMetricsRepository
 from hub_metrics.entity import Metric
 from hub_metrics.service import Service as HubMetricsService
+from improvement_plan.improvement_plan import MalformedPlanError
 from internal.http.aeko_metrics_handlers import router as aeko_metrics_router
 from internal.http.hub_metrics_handlers import router as hub_metrics_router
 from internal.http.improvement_plan_handlers import router as improvement_plan_router
 from internal.http.session_handlers import router as session_router
 from internal.http.user_handlers import router as user_router
+from session.session import GuardrailRejectedError
 from shared import (
     Event,
     Module,
@@ -54,6 +56,7 @@ from aeko import (
     AekoTool,
     AekoUser,
     AekoUserMemory,
+    MalformedAgentOutputError,
 )
 
 load_dotenv()
@@ -106,6 +109,12 @@ ROI_PAYBACK_TOOLS = [AekoTool(tool=tool) for tool in get_roi_payback_tools()]
 # agents' own names, which is what the graph routes by — pass them exactly as
 # the SDK spells them, accents included. `set_tools()` replaces the whole
 # registry, so every agent's tools travel in the single call below.
+#
+# Four of the SDK's nine agents are absent on purpose. `Roteador` and
+# `Orquestrador` route and consolidate, and the two reviewers — `Guardrail de
+# Saída` and, since 3.2, `Verificador de Resposta` — judge a draft against the
+# analyses that produced it. A reviewer holding a search tool could go find the
+# support the draft lacks, which is the one thing it must never do.
 AEKO_TOOLS = {
     # FAQ only maps the Aether website — it never gets a free-form search tool.
     "FAQ": list(TAVILY_SITE_MAP_TOOLS)
@@ -177,6 +186,67 @@ def _warm_up_mcp_sessions() -> None:
         threading.Thread(target=warm_up, args=(session,), daemon=True).start()
 
 
+def _carrying_tracking(error: Exception, cause: MalformedAgentOutputError) -> Exception:
+    """Move the failed run's tracking onto the error that replaces it.
+
+    A run nobody was answered with is still a run that was paid for, and the
+    exception is the only thing left carrying the account of it — dropping it
+    in translation would lose the row that says the outcome happened.
+    """
+
+    error.aeko_metrics = getattr(cause, "aeko_metrics", None)
+    return error
+
+
+class _Messenger(AekoMessenger):
+    """The SDK's messenger, answering in this API's own error vocabulary.
+
+    Since SDK 3.2 a turn that neither the `Guardrail de Saída` nor the
+    `Verificador de Resposta` approved raises `MalformedAgentOutputError` —
+    where 3.1 returned normally with an empty output. Translating it here is
+    what keeps the rule this file exists for: `MalformedAgentOutputError` is an
+    `aeko` name, and `session/` may not know one. It already has an error for
+    exactly this outcome, so the boundary is where the two meet.
+    """
+
+    def send_message(self, message, session, *, id_request):
+        try:
+            return super().send_message(message, session, id_request=id_request)
+        except MalformedAgentOutputError as exc:
+            raise _carrying_tracking(
+                GuardrailRejectedError(
+                    "No answer for this turn was approved by the output guardrail "
+                    "or the response checker. Please rephrase."
+                ),
+                exc,
+            ) from exc
+
+
+class _InventoryAnalyzer(AekoInventoryAnalyzer):
+    """The SDK's analyzer, answering in this API's own error vocabulary.
+
+    The report flow reaches neither reviewer, but the coordinator still has to
+    write the plan's three sections and `analyze()` raises the same
+    `MalformedAgentOutputError` when four rewrites did not get it there.
+    Translated here for the same reason its conversational sibling above is.
+    """
+
+    def analyze(self, inventory, *, id_external_inventory, id_request):
+        try:
+            return super().analyze(
+                inventory,
+                id_external_inventory=id_external_inventory,
+                id_request=id_request,
+            )
+        except MalformedAgentOutputError as exc:
+            raise _carrying_tracking(
+                MalformedPlanError(
+                    "The analysis produced no plan in the shape a report is stored in."
+                ),
+                exc,
+            ) from exc
+
+
 def build_messenger(user, memories) -> AekoMessenger:
     """A messenger for one user, built per request.
 
@@ -184,7 +254,7 @@ def build_messenger(user, memories) -> AekoMessenger:
     `send_message()` call instead, so nothing about a session is retained
     between requests and any worker can serve any conversation.
     """
-    return AekoMessenger(
+    return _Messenger(
         AekoUser(
             id=user.id,
             id_external_user=user.id_external_user,
@@ -292,7 +362,7 @@ def build_aeko_metrics_sink(database):
 
 def build_inventory_analyzer() -> AekoInventoryAnalyzer:
     """A fresh analyzer per report: `set_context()` is instance state."""
-    return AekoInventoryAnalyzer()
+    return _InventoryAnalyzer()
 
 
 @asynccontextmanager

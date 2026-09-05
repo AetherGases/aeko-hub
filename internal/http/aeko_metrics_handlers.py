@@ -22,9 +22,9 @@ class AekoMetricResponseData(BaseModel):
     id: str = Field(..., description="Identifier of the stored row.", example="65a8b3d6c0f8e1d7f4b2c0bb")
     id_request: str = Field(..., description="The request this run belongs to, answered to its caller in the X-Request-Id header and stored as the identifier of its hub_metrics row.", example="65a8b3d6c0f8e1d7f4b2c0aa")
     latency: int = Field(..., description="How long the whole SDK run took, in whole milliseconds.", example=4823)
-    error_description: str | None = Field(None, description="Why the run failed, or null when it did not. A conversational turn the output guardrail never approved counts as failed even though it answers normally.", example=None)
+    error_description: str | None = Field(None, description="Why the run failed, or null when it did not. A conversational turn no reviewer approved is one of these: it delivers nothing, and this row is the only account left of what it cost.", example=None)
     flow: str = Field(..., description="Which entry point served it: conversational for a chat turn, analytical for an inventory analysis.", example="conversational")
-    used_agents: list[AgentMetricResponseData] = Field(..., description="One entry per agent invocation, in call order. An agent the guardrail's retry loop called again is listed again.")
+    used_agents: list[AgentMetricResponseData] = Field(..., description="One entry per agent invocation, in call order. An agent a reviewer's retry loop called again is listed again.")
 
     class Config:
         frozen = True

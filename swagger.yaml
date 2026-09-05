@@ -206,13 +206,13 @@ paths:
               example:
                 detail: User is not allowed to access this session.
         '502':
-          description: The output guardrail rejected every draft, so the run produced no answer.
+          description: Neither the output guardrail nor the response checker approved a draft, so the run produced no answer.
           content:
             application/json:
               schema:
                 $ref: '#/components/schemas/ErrorResponse'
               example:
-                detail: The output guardrail rejected every draft. Please rephrase.
+                detail: No answer for this turn was approved by the output guardrail or the response checker. Please rephrase.
         '500':
           description: The Aeko SDK is not initialized or an unexpected error occurred.
           content:
@@ -272,6 +272,14 @@ paths:
                 $ref: '#/components/schemas/ErrorResponse'
               example:
                 detail: ms-inventory answered inventory 502 without content.
+        '502':
+          description: The analysis produced no plan under the three headings a report is stored in.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+              example:
+                detail: The analysis produced no plan in the shape a report is stored in.
         '503':
           description: Database connection is unavailable.
           content:
@@ -564,7 +572,7 @@ components:
         error_description:
           type: string
           nullable: true
-          description: Why the run failed, or null when it did not. A conversational turn the output guardrail never approved counts as failed even though it answers normally.
+          description: 'Why the run failed, or null when it did not. A conversational turn no reviewer approved is one of these: it delivers nothing, and this row is the only account left of what it cost.'
           example: null
         flow:
           type: string
@@ -577,7 +585,7 @@ components:
           type: array
           items:
             $ref: '#/components/schemas/AgentMetricResponseData'
-          description: One entry per agent invocation, in call order. An agent the guardrail's retry loop called again is listed again.
+          description: One entry per agent invocation, in call order. An agent a reviewer's retry loop called again is listed again.
       required:
         - id
         - id_request

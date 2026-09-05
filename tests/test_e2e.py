@@ -243,6 +243,13 @@ def test_registered_tool_keys_are_all_known_agents(live_app, fake_sdk):
     assert TOOLED_AGENTS.issubset(set(fake_sdk.AGENT_NAMES))
 
 
+def test_the_reviewers_are_registered_no_tools(live_app, fake_sdk):
+    """A reviewer judges a draft against the analyses that produced it. One
+    holding a search tool could go find the support the draft lacks, which is
+    the one thing it must never do."""
+    assert not {"Guardrail de Saída", "Verificador de Resposta"} & set(fake_sdk.RUNTIME.tools)
+
+
 def test_lifespan_registers_every_agent_in_a_single_call(live_app, fake_sdk):
     """`set_tools()` replaces the whole registry, so one call must carry them all."""
     assert len(fake_sdk.RUNTIME.set_tools_calls) == 1
@@ -613,7 +620,10 @@ def test_send_message_names_a_brand_new_session_after_its_first_message(live_app
     assert session_repository.created_names == {"session-2": "How do I cut boiler emissions?"}
 
 
-def test_send_message_returns_502_when_the_guardrail_rejected_every_draft(live_app, fake_sdk):
+def test_send_message_returns_502_when_no_reviewer_approved_a_draft(live_app, fake_sdk):
+    """Since SDK 3.2 the rejection is an exception, translated into this API's
+    own error by `cmd/api/main.py` — the whole way down to the status code the
+    caller reads."""
     client, _, _, session_repository = live_app
     fake_sdk.AekoMessenger.next_approved = False
 
@@ -693,6 +703,24 @@ def test_a_report_records_what_the_analysis_cost(report_app):
     assert document["id_request"] == response.headers["x-request-id"]
 
 
+def test_a_report_without_a_plan_answers_502_and_stores_nothing(report_app, fake_sdk):
+    """The report flow passes neither reviewer, but the coordinator still has to
+    write the plan under its three headings — and `analyze()` raises the same
+    `MalformedAgentOutputError` when it never does."""
+    client, api_main, plan_repository, _ = report_app
+    fake_sdk.AekoInventoryAnalyzer.next_error = fake_sdk.MalformedAgentOutputError(
+        "the coordinator never wrote the plan's three headings"
+    )
+
+    response = request_report(client)
+
+    assert response.status_code == 502
+    assert plan_repository.plans == []
+    # The analysis happened, so it is recorded like any other run.
+    (document,) = stored_metrics(api_main)
+    assert document["flow"] == "analytical"
+
+
 def test_the_plan_is_remembered_for_the_user_who_asked(report_app, live_app):
     client, *_ = report_app
     _, _, user_repository, _ = live_app
@@ -744,7 +772,9 @@ def test_the_two_metric_bases_name_the_same_request(live_app):
     assert str(request_row["_id"]) == run_row["id_request"]
 
 
-def test_a_turn_the_guardrail_rejected_is_still_recorded(live_app, fake_sdk):
+def test_a_turn_no_reviewer_approved_is_still_recorded(live_app, fake_sdk):
+    """The run was made and paid for, and the exception is the only thing left
+    carrying the account of it."""
     client, api_main, _, _ = live_app
     fake_sdk.AekoMessenger.next_approved = False
 
@@ -752,7 +782,7 @@ def test_a_turn_the_guardrail_rejected_is_still_recorded(live_app, fake_sdk):
 
     assert response.status_code == 502
     (document,) = stored_metrics(api_main)
-    assert document["error_description"] == "no answer approved by the output guardrail"
+    assert document["error_description"] == fake_sdk.REVIEW_FAILURE
 
 
 def test_a_request_that_never_reached_the_sdk_records_no_run(live_app):

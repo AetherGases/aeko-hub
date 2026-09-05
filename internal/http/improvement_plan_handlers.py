@@ -3,7 +3,7 @@ from fastapi.concurrency import run_in_threadpool
 from pydantic import BaseModel, Field
 
 from improvement_plan.database.repository import Repository
-from improvement_plan.improvement_plan import IService
+from improvement_plan.improvement_plan import IService, MalformedPlanError
 from improvement_plan.integration.ms_inventory import Repository as InventoryRepository
 from improvement_plan.service import Service
 
@@ -59,6 +59,7 @@ def get_improvement_plan_service(request: Request) -> IService:
             },
         },
         400: {"description": "One or more request parameters are invalid, or the inventory has no content."},
+        502: {"description": "The analysis produced no plan under the three headings a report is stored in."},
         503: {"description": "Database connection is unavailable."},
         500: {"description": "The Aeko SDK is not initialized or an unexpected error occurred."},
     },
@@ -99,5 +100,10 @@ async def input_report(
         )
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except MalformedPlanError as exc:
+        # The run was made and is recorded; what it produced is simply not a
+        # report. 502 rather than 500 for the same reason its conversational
+        # sibling is: the answer to it is to ask again, not to page anyone.
+        raise HTTPException(status_code=502, detail=str(exc)) from exc
     except Exception as exc:
         raise HTTPException(status_code=500, detail=f"Error processing report: {exc}") from exc

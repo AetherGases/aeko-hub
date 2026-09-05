@@ -11,7 +11,7 @@ def create_metric_query(metric: Metric) -> dict:
     Mongo's — the same arrangement every other domain in this API has.
 
     The agents are stored in call order, one entry per invocation, because that
-    order is what the guardrail's retry loop looks like from the outside.
+    order is what a reviewer's retry loop looks like from the outside.
     """
 
     return {

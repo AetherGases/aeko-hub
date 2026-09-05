@@ -4,12 +4,19 @@ from session.entity import Message, Session
 
 
 class GuardrailRejectedError(Exception):
-    """Raised when the SDK returned a run the output guardrail never approved.
+    """Raised when no reviewer of the SDK approved an answer for the turn.
 
-    Not a failure of the run: the agents answered, the `Guardrail de Saida`
-    sent every draft back, and `AekoMessageResponse.message.output` came back
-    empty. There is no answer to persist and none to return, so the exchange
-    stops here instead of storing a turn the user never saw.
+    Not a failure of the run: the agents answered, and one of the two
+    reviewers sent every draft back — the `Guardrail de Saida`, which asks
+    whether the draft is grounded in the analyses, or the `Verificador de
+    Resposta`, which asks whether it answers what was asked. Two rejections
+    each is as far as either goes.
+
+    Since SDK 3.2 that outcome arrives as `MalformedAgentOutputError` rather
+    than as an empty output, and is translated into this error by
+    `cmd/api/main.py` — the one file that may know the SDK's names. Either way
+    there is no answer to persist and none to return, so the exchange stops
+    here instead of storing a turn the user never saw.
     """
 
 

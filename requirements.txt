@@ -1,5 +1,11 @@
 # Runtime
-aeko>=3.1.0,<4.0.0
+#
+# The floor is 3.2 and not 3.1 because of one contract, not one feature: a
+# conversational turn that no reviewer approved raises `MalformedAgentOutputError`
+# there, where 3.1 answered with an empty output. `cmd/api/main.py` translates the
+# exception and nothing reads the empty output any more, so on 3.1 this API would
+# persist the turn nobody was answered with.
+aeko>=3.2.0,<4.0.0
 fastapi>=0.115.0,<1.0.0
 uvicorn[standard]>=0.30.0,<1.0.0
 pydantic>=2.13.4,<3.0.0

@@ -14,6 +14,7 @@ from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
 from improvement_plan.entity import ImprovementPlan
+from improvement_plan.improvement_plan import MalformedPlanError
 from internal.http import improvement_plan_handlers
 
 ROUTE = "/aether-api/v1/ai/report"
@@ -115,6 +116,21 @@ def test_input_report_maps_value_error_to_400(patched_user_service):
 
     assert response.status_code == 400
     assert response.json()["detail"] == "id_external_inventory is required."
+
+
+def test_input_report_maps_a_plan_that_never_took_shape_to_502(patched_user_service):
+    """The run was made and is recorded; what it produced is simply not a
+    report, and the answer to that is to ask again rather than to page anyone."""
+    service = StubReportService(
+        error=MalformedPlanError("The analysis produced no plan in the shape a report is stored in.")
+    )
+
+    response = build_client(service).post(ROUTE, params=REQUIRED_PARAMS)
+
+    assert response.status_code == 502
+    assert response.json()["detail"] == (
+        "The analysis produced no plan in the shape a report is stored in."
+    )
 
 
 def test_input_report_maps_unexpected_error_to_500(patched_user_service):

@@ -22,6 +22,12 @@ ID_SESSION = "s1"
 ID_USER = "u1"
 SUBMITTED_AT = datetime(2026, 7, 26, 14, 30, 0)
 
+# What the tracking of a turn neither reviewer approved says about it. The
+# service never sees the SDK exception itself: `cmd/api/main.py` translates it
+# into `GuardrailRejectedError` at the boundary, which is what the stub below
+# raises.
+REVIEW_FAILURE = "no answer approved by the output guardrail or the response checker"
+
 USER = User(id=ID_USER, id_external_user=12345, role="analyst", usecase="report_generation")
 
 
@@ -73,18 +79,22 @@ class StubMessenger:
         self.sent.append((message, session, id_request))
         if self.error is not None:
             raise self.error
-        turn = self.turn or StubTurn(
-            input=message,
-            output=f"echo: {message}" if self.approved else "",
-        )
-        output = turn.output
+
+        # A turn nobody approved arrives already translated, carrying the
+        # tracking of the run that was made anyway.
+        if not self.approved:
+            rejection = GuardrailRejectedError(REVIEW_FAILURE)
+            rejection.aeko_metrics = StubMetrics(
+                id_request=id_request,
+                error_description=REVIEW_FAILURE,
+            )
+            raise rejection
+
+        turn = self.turn or StubTurn(input=message, output=f"echo: {message}")
         return StubResponse(
             turn,
-            aeko_metrics=StubMetrics(
-                id_request=id_request,
-                error_description=None if output else "no answer approved by the output guardrail",
-            ),
-            approved=self.approved,
+            aeko_metrics=StubMetrics(id_request=id_request),
+            approved=True,
         )
 
 
@@ -449,16 +459,18 @@ def test_send_message_does_not_rename_an_existing_session():
 
 
 # ---------------------------------------------------------------------------
-# send_message — the guardrail
+# send_message — the reviewers
 # ---------------------------------------------------------------------------
-def test_send_message_raises_when_the_guardrail_rejected_every_draft():
+def test_send_message_raises_when_no_reviewer_approved_a_draft():
+    """The rejection travels out as it arrived: not wrapped in the RuntimeError
+    every other failure of this method becomes, because it is not one."""
     service, _ = build_service()
 
     with pytest.raises(GuardrailRejectedError):
         send(service, messengers=StubMessengerFactory(approved=False))
 
 
-def test_send_message_persists_nothing_when_the_guardrail_rejected_every_draft():
+def test_send_message_persists_nothing_when_no_reviewer_approved_a_draft():
     service, repository = build_service()
 
     with pytest.raises(GuardrailRejectedError):
@@ -573,17 +585,17 @@ def test_an_answered_turn_records_what_the_run_cost(recorded_metrics):
     assert recorded_metrics[0].error_description is None
 
 
-def test_a_turn_the_guardrail_rejected_is_recorded_as_the_failure_it_was(recorded_metrics):
-    """It returns normally and delivers nothing, so the tracking is the only
-    place that outcome is written down — and it is written even though the
-    exchange itself is never persisted."""
+def test_a_turn_no_reviewer_approved_is_recorded_as_the_failure_it_was(recorded_metrics):
+    """It delivers nothing, so the tracking is the only place that outcome is
+    written down — and it is written even though the exchange itself is never
+    persisted."""
     service, repository = build_service()
 
     with pytest.raises(GuardrailRejectedError):
         send(service, messengers=StubMessengerFactory(approved=False))
 
     assert len(recorded_metrics) == 1
-    assert recorded_metrics[0].error_description == "no answer approved by the output guardrail"
+    assert recorded_metrics[0].error_description == REVIEW_FAILURE
     assert repository.saved == []
 
 

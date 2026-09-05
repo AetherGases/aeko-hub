@@ -158,9 +158,14 @@ def test_a_successful_request_has_no_error_description():
 
 
 def test_a_failed_request_carries_why_it_failed():
-    metric = build_metric(error_description="no answer approved by the output guardrail")
+    metric = build_metric(
+        error_description="no answer approved by the output guardrail or the response checker"
+    )
 
-    assert metric.error_description == "no answer approved by the output guardrail"
+    assert (
+        metric.error_description
+        == "no answer approved by the output guardrail or the response checker"
+    )
 
 
 def test_a_metric_arrives_without_an_identifier():
