@@ -13,18 +13,15 @@ from datetime import datetime, timezone
 from enum import Enum
 from typing import Any
 
-APP_NAME = "aeko-hub"
-
-
-TIMESTAMP_FORMAT = "%Y-%m-%dT%H:%M:%SZ"
-
-
-BLUE = "\033[34m"
-RED = "\033[31m"
-RESET = "\033[0m"
-
-TRUE_VALUES = {"1", "true", "yes", "on"}
-FALSE_VALUES = {"0", "false", "no", "off"}
+from internal.shared.constants import (
+    APP_NAME,
+    TIMESTAMP_FORMAT,
+    BLUE,
+    RED,
+    RESET,
+    TRUE_VALUES,
+    FALSE_VALUES,
+)
 
 
 class Module(str, Enum):

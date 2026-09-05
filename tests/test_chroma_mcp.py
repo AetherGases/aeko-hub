@@ -164,6 +164,17 @@ def test_configure_mcp_client_omits_passthrough_variables_that_are_unset(monkeyp
     assert "SENTENCE_TRANSFORMERS_HOME" not in config["env"]
 
 
+def test_configure_mcp_client_forwards_server_configuration(monkeypatch):
+    """Pass environment overrides to the child without relying on a deployed dotenv file."""
+    monkeypatch.setenv("EMBEDDING_MODEL", "configured-embedding-model")
+    monkeypatch.setenv("DEFAULT_RESULT_COUNT", "3")
+    monkeypatch.setenv("QUERY_INCLUDE", '["documents"]')
+    config = configured_child(monkeypatch, "explicit-tenant", "explicit-database", "explicit-key")
+    assert config["env"]["EMBEDDING_MODEL"] == "configured-embedding-model"
+    assert config["env"]["DEFAULT_RESULT_COUNT"] == "3"
+    assert config["env"]["QUERY_INCLUDE"] == '["documents"]'
+
+
 def test_configure_mcp_client_falls_back_to_the_chroma_env_vars(monkeypatch, cloud_env):
     """Verify that configure mcp client falls back to the chroma env vars."""
     config = configured_child(monkeypatch)

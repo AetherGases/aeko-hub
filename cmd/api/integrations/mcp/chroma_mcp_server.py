@@ -14,15 +14,20 @@ from chromadb.utils.embedding_functions import SentenceTransformerEmbeddingFunct
 from mcp.server.fastmcp import FastMCP
 
 
-GASES_INFO_COLLECTION = "gases-info"
-
-
-EMBEDDING_MODEL = "paraphrase-multilingual-mpnet-base-v2"
-
-DEFAULT_RESULT_COUNT = 5
-
-
-QUERY_INCLUDE = ["documents", "metadatas", "distances"]
+if __package__:
+    from .constants import (
+        GASES_INFO_COLLECTION,
+        EMBEDDING_MODEL,
+        DEFAULT_RESULT_COUNT,
+        QUERY_INCLUDE,
+    )
+else:
+    from constants import (
+        GASES_INFO_COLLECTION,
+        EMBEDDING_MODEL,
+        DEFAULT_RESULT_COUNT,
+        QUERY_INCLUDE,
+    )
 
 
 mcp = FastMCP("aeko-chroma", log_level="WARNING")

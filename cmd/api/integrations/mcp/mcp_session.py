@@ -16,13 +16,11 @@ from langchain_mcp_adapters.tools import load_mcp_tools
 from internal.shared import Module, log_success, operation
 
 
-DEFAULT_STARTUP_TIMEOUT = 300.0
-
-
-DEFAULT_CALL_TIMEOUT = 120.0
-
-
-DEFAULT_CLOSE_TIMEOUT = 30.0
+from cmd.api.integrations.mcp.constants import (
+    DEFAULT_STARTUP_TIMEOUT,
+    DEFAULT_CALL_TIMEOUT,
+    DEFAULT_CLOSE_TIMEOUT,
+)
 
 
 class MCPSessionError(RuntimeError):

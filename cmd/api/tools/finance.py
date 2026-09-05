@@ -14,53 +14,16 @@ from langchain_core.tools import Tool
 from internal.shared import Module, logged
 
 
-ROI_HORIZON_MONTHS = 60
-
-
-ROI_PAYBACK_NOT_RECOVERED = -1
-
-
-ROI_DECIMAL_PLACES = 2
-
-
-ROI_MAX_WACC_MONTHLY = 1
-
-
-ROI_CASH_FLOW_FIELDS = ("cash_flows", "monthly_cash_flow")
-
-ROI_REQUEST_FIELDS = ("capex", "wacc_monthly", *ROI_CASH_FLOW_FIELDS)
-
-
-ROI_REQUEST_DESCRIPTION = (
-    'Input is a JSON object string with "capex" (the initial investment, above '
-    'zero), "wacc_monthly" (the monthly discount rate as a decimal, so 0.01 is '
-    "1% a month — convert an annual rate before sending it) and exactly one of "
-    '"monthly_cash_flow" (one net monthly cash flow, repeated over the '
-    f'{ROI_HORIZON_MONTHS} months) or "cash_flows" (the monthly flows in order, '
-    f"up to {ROI_HORIZON_MONTHS} of them, months left out counting as zero; a "
-    "month that costs money is negative) — for example "
-    '\'{"capex": 150000, "wacc_monthly": 0.01, "monthly_cash_flow": 5000}\'. '
-    f"Each flow is discounted to its present value over a fixed {ROI_HORIZON_MONTHS}"
-    "-month horizon."
-)
-
-ROI_DESCRIPTION = (
-    "Calculates the return on investment (ROI) of an improvement project. "
-    + ROI_REQUEST_DESCRIPTION
-    + ' Answers "vp_total" (the present value of all the flows), "vpl" (that '
-    'minus the capex), "roi_percent" and "viable" (true when the capex is at '
-    "most the present value). Use it to decide whether a proposal is worth "
-    "making and to rank proposals against each other."
-)
-
-PAYBACK_DESCRIPTION = (
-    "Calculates the payback of an improvement project: the first month in "
-    "which the discounted cash flows accumulated so far have paid the capex "
-    "back. " + ROI_REQUEST_DESCRIPTION + ' Answers "payback_months", which is '
-    f"{ROI_PAYBACK_NOT_RECOVERED} when the capex is not recovered within the "
-    f"{ROI_HORIZON_MONTHS} months, together with \"vp_total\" and \"viable\". "
-    "Use it to say how long the company waits, which is a different question "
-    "from whether the project pays — calculate_roi answers that one."
+from cmd.api.tools.constants import (
+    ROI_HORIZON_MONTHS,
+    ROI_PAYBACK_NOT_RECOVERED,
+    ROI_DECIMAL_PLACES,
+    ROI_MAX_WACC_MONTHLY,
+    ROI_CASH_FLOW_FIELDS,
+    ROI_REQUEST_FIELDS,
+    ROI_REQUEST_DESCRIPTION,
+    ROI_DESCRIPTION,
+    PAYBACK_DESCRIPTION,
 )
 
 

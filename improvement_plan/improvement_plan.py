@@ -10,7 +10,9 @@ from improvement_plan.entity import ImprovementPlan
 from user.user import IService as IUserService
 
 
-PREVIOUS_PLANS_FOR_CONTEXT = 2
+from improvement_plan.constants import (
+    PREVIOUS_PLANS_FOR_CONTEXT,
+)
 
 
 class MalformedPlanError(Exception):

@@ -1,8 +1,15 @@
 """Export shared logging, operation timing, and request metric utilities."""
 
-from internal.shared.event_tracking import (
+from internal.shared.constants import (
+    APP_NAME,
+    BLUE,
     CRASHED_STATUS,
+    RED,
     REQUEST_ID_HEADER,
+    RESET,
+    TIMESTAMP_FORMAT,
+)
+from internal.shared.event_tracking import (
     Event,
     answer_with_id_request,
     bind_id_request,
@@ -16,11 +23,6 @@ from internal.shared.event_tracking import (
     unbind_id_request,
 )
 from internal.shared.logger import (
-    APP_NAME,
-    BLUE,
-    RED,
-    RESET,
-    TIMESTAMP_FORMAT,
     Module,
     color_enabled,
     elapsed_since,

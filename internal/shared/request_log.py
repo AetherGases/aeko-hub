@@ -14,8 +14,16 @@ import time
 from dataclasses import dataclass
 from typing import Any, Callable
 
-from internal.shared.event_tracking import (
+from internal.shared.constants import (
+    BLUE,
     CRASHED_STATUS,
+    FAILING_STATUS,
+    INDENT,
+    RED,
+    TRUE_VALUES,
+    UVICORN_ACCESS_LOGGER,
+)
+from internal.shared.event_tracking import (
     Event,
     answer_with_id_request,
     bind_id_request,
@@ -25,23 +33,12 @@ from internal.shared.event_tracking import (
     unbind_id_request,
 )
 from internal.shared.logger import (
-    BLUE,
-    RED,
-    TRUE_VALUES,
     Module,
     elapsed_since,
     format_entry,
     paint,
     write,
 )
-
-
-UVICORN_ACCESS_LOGGER = "uvicorn.access"
-
-INDENT = "    "
-
-
-FAILING_STATUS = 400
 
 
 @dataclass(frozen=True)

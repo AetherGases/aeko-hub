@@ -10,24 +10,14 @@ from .mcp_session import PersistentMCPSession
 
 from internal.shared import Module, logged
 
-TAVILY_SEARCH_TOOL_NAME = "tavily_search"
-TAVILY_RESEARCH_TOOL_NAME = "tavily_research"
-TAVILY_MAP_TOOL_NAME = "tavily_map"
-
-
-TAVILY_MCP_SERVER_PACKAGE = "tavily-mcp@0.2.22"
-
-TAVILY_SEARCH_DESCRIPTION = (
-    "Searches the web via Tavily for current information the agent's own "
-    "knowledge does not cover. Input is a search query string."
-)
-TAVILY_RESEARCH_DESCRIPTION = (
-    "Runs a deeper Tavily research pass over a topic, gathering more context "
-    "than a plain search. Input is a research query string."
-)
-TAVILY_MAP_DESCRIPTION = (
-    "Maps the Aether website's structure via Tavily to help answer FAQ "
-    "questions about it. Takes no meaningful input; the site is fixed."
+from cmd.api.integrations.mcp.constants import (
+    TAVILY_SEARCH_TOOL_NAME,
+    TAVILY_RESEARCH_TOOL_NAME,
+    TAVILY_MAP_TOOL_NAME,
+    TAVILY_MCP_SERVER_PACKAGE,
+    TAVILY_SEARCH_DESCRIPTION,
+    TAVILY_RESEARCH_DESCRIPTION,
+    TAVILY_MAP_DESCRIPTION,
 )
 
 

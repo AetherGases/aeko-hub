@@ -14,28 +14,14 @@ from .mcp_session import PersistentMCPSession
 
 from internal.shared import Module, logged
 
-MONGO_FIND_TOOL_NAME = "find"
-
-
-MONGO_CONNECTION_ID = "preconfigured"
-
-
-MONGO_MCP_SERVER_PACKAGE = "mongodb-mcp-server@2.1.0"
-
-IMPROVEMENT_PLAN_COLLECTION = "improvement_plan"
-USER_MEMORY_COLLECTION = "user_memory"
-
-FIND_IMPROVEMENT_PLAN_DESCRIPTION = (
-    "Reads improvement plan documents from MongoDB. Input is a JSON object "
-    "string used as the MongoDB filter (e.g. '{\"id_external_inventory\": 42}'), "
-    "or an empty string to fetch every improvement plan. Read-only; always "
-    "scoped to the improvement_plan collection."
-)
-FIND_USER_MEMORY_DESCRIPTION = (
-    "Reads user memory documents from MongoDB. Input is a JSON object string "
-    "used as the MongoDB filter (e.g. '{\"id_user\": \"u1\"}'), or an empty "
-    "string to fetch every user memory. Read-only; always scoped to the "
-    "user_memory collection."
+from cmd.api.integrations.mcp.constants import (
+    MONGO_FIND_TOOL_NAME,
+    MONGO_CONNECTION_ID,
+    MONGO_MCP_SERVER_PACKAGE,
+    IMPROVEMENT_PLAN_COLLECTION,
+    USER_MEMORY_COLLECTION,
+    FIND_IMPROVEMENT_PLAN_DESCRIPTION,
+    FIND_USER_MEMORY_DESCRIPTION,
 )
 
 

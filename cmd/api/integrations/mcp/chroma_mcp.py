@@ -6,7 +6,6 @@ environment. Progress bars are disabled to avoid filling the stderr pipe.
 
 import os
 import sys
-from pathlib import Path
 from typing import Any
 
 from langchain_core.tools import Tool
@@ -16,34 +15,12 @@ from .mcp_session import PersistentMCPSession
 
 from internal.shared import Module, logged
 
-QUERY_GASES_INFO_TOOL_NAME = "query_gases_info"
-
-
-CHROMA_MCP_SERVER_SCRIPT = Path(__file__).with_name("chroma_mcp_server.py")
-
-
-PASSTHROUGH_ENV_VARS = (
-    "PATH",
-    "HOME",
-    "USERPROFILE",
-    "SYSTEMROOT",
-    "HF_HOME",
-    "TRANSFORMERS_CACHE",
-    "SENTENCE_TRANSFORMERS_HOME",
-)
-
-
-QUIET_CHILD_ENV = {
-    "TQDM_DISABLE": "1",
-    "HF_HUB_DISABLE_PROGRESS_BARS": "1",
-}
-
-QUERY_GASES_INFO_DESCRIPTION = (
-    "Searches the Aether greenhouse-gas knowledge base by meaning, not by "
-    "keyword, to find information such as possible substitutions for a gas. "
-    "Input is the question or topic to look up, in plain text (e.g. 'what can "
-    "replace SF6 in switchgear'). Read-only; always scoped to the gases-info "
-    "collection."
+from cmd.api.integrations.mcp.constants import (
+    QUERY_GASES_INFO_TOOL_NAME,
+    CHROMA_MCP_SERVER_SCRIPT,
+    PASSTHROUGH_ENV_VARS,
+    QUIET_CHILD_ENV,
+    QUERY_GASES_INFO_DESCRIPTION,
 )
 
 

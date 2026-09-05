@@ -6,59 +6,21 @@ Expression length and exponents are bounded, and non-finite results are rejected
 
 import ast
 import math
-import operator
 
 from langchain_core.tools import Tool
 
 from internal.shared import Module, logged
 
 
-CALCULATOR_OPERATORS = {
-    ast.Add: operator.add,
-    ast.Sub: operator.sub,
-    ast.Mult: operator.mul,
-    ast.Div: operator.truediv,
-    ast.FloorDiv: operator.floordiv,
-    ast.Mod: operator.mod,
-    ast.Pow: operator.pow,
-}
-
-CALCULATOR_UNARY_OPERATORS = {ast.UAdd: operator.pos, ast.USub: operator.neg}
-
-
-CALCULATOR_FUNCTIONS = {
-    "abs": abs,
-    "log": math.log,
-    "max": max,
-    "min": min,
-    "round": round,
-    "sqrt": math.sqrt,
-    "sum": sum,
-}
-
-
-CALCULATOR_MAX_EXPRESSION_LENGTH = 500
-
-
-CALCULATOR_MAX_EXPONENT = 1000
-
-
-CALCULATOR_DECIMAL_PLACES = 10
-
-
-CALCULATOR_MAX_EXACT_INTEGER = 2**53
-
-CALCULATOR_DESCRIPTION = (
-    "Calculates an arithmetic expression exactly. Use it for every number you "
-    "report — totals, emission factors applied to activity data, unit "
-    "conversions, percentages and differences — instead of working the "
-    "arithmetic out yourself. Input is the expression alone, as text, with no "
-    "words around it: for example '(1200 * 2.68) / 1000'. It understands "
-    "numbers, the operators + - * / // % ** and parentheses, and these "
-    "functions: abs, log, max, min, round, sqrt, sum (for example "
-    "'round(sum([120.5, 340.2, 78.9]), 2)'). It answers with the number alone. "
-    "It has no variables and no units, so substitute the values yourself and "
-    "keep track of the unit."
+from cmd.api.tools.constants import (
+    CALCULATOR_OPERATORS,
+    CALCULATOR_UNARY_OPERATORS,
+    CALCULATOR_FUNCTIONS,
+    CALCULATOR_MAX_EXPRESSION_LENGTH,
+    CALCULATOR_MAX_EXPONENT,
+    CALCULATOR_DECIMAL_PLACES,
+    CALCULATOR_MAX_EXACT_INTEGER,
+    CALCULATOR_DESCRIPTION,
 )
 
 

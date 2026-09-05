@@ -1,11 +1,11 @@
 """Coordinate domain operations for improvement plans."""
 
+from improvement_plan.constants import PREVIOUS_PLANS_FOR_CONTEXT
 from improvement_plan.entity import ImprovementPlan
 from improvement_plan.improvement_plan import (
     IInventoryRepository,
     IRepository,
     IService,
-    PREVIOUS_PLANS_FOR_CONTEXT,
 )
 from internal.shared import current_id_request, record_aeko_metrics
 from user.user import IService as IUserService, UserMemory

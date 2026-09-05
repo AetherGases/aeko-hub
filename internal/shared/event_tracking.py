@@ -15,14 +15,12 @@ from bson import ObjectId
 from internal.shared.logger import Module, log_failure
 
 
-CRASHED_STATUS = 500
-
-UNKNOWN_ENDPOINT = "?"
-
-
-REQUEST_ID_HEADER = "x-request-id"
-
-_HEADER_NAME = REQUEST_ID_HEADER.encode("ascii")
+from internal.shared.constants import (
+    CRASHED_STATUS,
+    UNKNOWN_ENDPOINT,
+    REQUEST_ID_HEADER,
+    _HEADER_NAME,
+)
 
 
 @dataclass(frozen=True)

@@ -2,12 +2,31 @@
 
 import asyncio
 import inspect
+import runpy
 import sys
 import types
+from pathlib import Path
 
 import pytest
 
 from cmd.api.integrations.mcp import chroma_mcp_server
+from cmd.api.integrations.mcp import constants
+
+
+def test_standalone_server_loads_package_constants(monkeypatch):
+    """Load the server by file path with no package context or external server startup."""
+    script = Path(chroma_mcp_server.__file__)
+    monkeypatch.syspath_prepend(str(script.parent))
+    monkeypatch.delitem(sys.modules, "constants", raising=False)
+    try:
+        namespace = runpy.run_path(str(script))
+        assert not namespace["__package__"]
+        assert namespace["GASES_INFO_COLLECTION"] == constants.GASES_INFO_COLLECTION
+        assert namespace["EMBEDDING_MODEL"] == constants.EMBEDDING_MODEL
+        assert namespace["DEFAULT_RESULT_COUNT"] == constants.DEFAULT_RESULT_COUNT
+        assert namespace["QUERY_INCLUDE"] == constants.QUERY_INCLUDE
+    finally:
+        sys.modules.pop("constants", None)
 
 CLOUD_ENV = {
     "CHROMA_TENANT": "tenant-from-env",

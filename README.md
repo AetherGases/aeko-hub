@@ -14,6 +14,19 @@ and token settings use SDK defaults. `MS_INVENTORY_BASE_URL` is the inventory
 service origin; reports retrieve Markdown through its resolve endpoint.
 `AETHER_WEB_SITE_URL` selects the URL used by the Tavily site-map tool.
 
+Each `constants.py` loads `.env` from the repository root without overriding
+existing process environment variables. Copy all settings from `.env.example`
+when setting up a deployment; configurable constants have no Python fallback
+values. Restart the application after changing them.
+
+Lists, sets, tuples, and dictionaries use JSON in the environment. Log color
+values are JSON strings containing ANSI escapes; `INDENT` preserves its quoted
+spaces. The Chroma server script path is relative to its MCP package unless
+an absolute path is supplied. Financial descriptions use named placeholders
+such as `{ROI_HORIZON_MONTHS}` and `{ROI_REQUEST_DESCRIPTION}` so they follow
+the numeric settings. Calculator function mappings and request field schemas
+remain in Python.
+
 MCP sessions remain open for the application lifetime. Set `AEKO_MCP_WARM_UP`
 to `false` to open them on first use. Chroma requires the tenant, database,
 and API key and uses the embedding model configured for the `gases-info` corpus.
@@ -24,7 +37,8 @@ their purpose. Keep implementation documentation in docstrings and omit code
 comments. Use constants for shared configuration or meaningful domain values;
 use environment variable names directly where an alias adds no information.
 
-Run the full suite with `python -m pytest -q`. Tests use SDK and database doubles
+Run the full suite with `python -m pytest -q`. Tests load the example configuration
+to isolate constants from local settings, use SDK and database doubles,
 and disable MCP warm-up. `pytest.ini` disables the debugging plugin because the
 application's `cmd` package shadows the standard-library module used by `pdb`.
 `tests/test_code_quality.py` checks docstring presence and comment tokens;
