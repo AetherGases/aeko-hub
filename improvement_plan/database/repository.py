@@ -21,6 +21,17 @@ class Repository(IRepository):
 		except Exception as e:
 			raise RuntimeError(f"Error fetching improvement plan from database: {e}")
 
+	@logged(Module.DATABASE, "improvement_plan.get_last_by_id_external_unit")
+	def get_last_by_id_external_unit(self, id_external_unit, limit) -> list[ImprovementPlan]:
+		# An empty list is an answer, not a failure: it is what every unit's
+		# first report reads.
+		try:
+			query, projection, sort, limit = q.get_last_by_id_external_unit_query(id_external_unit, limit)
+			improvement_plans_data = self.db["improvement_plan"].find(query, projection, sort=sort, limit=limit)
+			return [improvement_plan_from_data(data) for data in improvement_plans_data]
+		except Exception as e:
+			raise RuntimeError(f"Error fetching improvement plans from database: {e}")
+
 	@logged(Module.DATABASE, "improvement_plan.create")
 	def create(self, improvement_plan: ImprovementPlan) -> ImprovementPlan:
 		try:
@@ -36,6 +47,7 @@ def improvement_plan_from_data(data: dict) -> ImprovementPlan:
 	return ImprovementPlan(
 		id=str(data.get("_id")) if data.get("_id") is not None else None,
 		id_external_inventory=data.get("id_external_inventory"),
+		id_external_unit=data.get("id_external_unit"),
 		defined_problem=data.get("defined_problem", ""),
 		method=data.get("method", ""),
 		reasoning=data.get("reasoning", ""),

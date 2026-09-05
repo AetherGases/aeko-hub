@@ -1,30 +1,45 @@
 """Unit tests for the Reports router.
 
-This router is not registered in `cmd/api/main.py` yet (see `test_e2e.py`),
-so it is mounted on a standalone app here to cover its HTTP contract.
+The route is mounted on a standalone app here to cover its HTTP contract on
+its own; `test_app_wiring.py` and `test_e2e.py` cover it inside the real
+application.
+
+What it takes changed with the flow it serves: no S3 reference, no PDF. The
+inventory is resolved by the ms-inventory microservice from its external id,
+and what comes back is the improvement plan that was persisted.
 """
 
 import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
+from improvement_plan.entity import ImprovementPlan
 from internal.http import improvement_plan_handlers
 
 ROUTE = "/aether-api/v1/ai/report"
-REQUIRED_PARAMS = {"s3": "reports/input/u1/input.pdf", "id_user": "u1"}
+REQUIRED_PARAMS = {"id_external_inventory": 502, "id_external_unit": 77, "id_user": "u1"}
+
+CREATED_PLAN = ImprovementPlan(
+    id="65a8b3d6c0f8e1d7f4b2c020",
+    id_external_inventory=502,
+    id_external_unit=77,
+    defined_problem="high scope 1 emissions",
+    method="replace the boiler fleet",
+    reasoning="direct combustion dominates the inventory",
+)
 
 
 class StubReportService:
-    def __init__(self, s3_path=None, error=None):
-        self.s3_path = s3_path
+    def __init__(self, plan=CREATED_PLAN, error=None):
+        self.plan = plan
         self.error = error
         self.calls = []
 
-    def input_report(self, *args):
+    def input_inventory(self, *args):
         self.calls.append(args)
         if self.error is not None:
             raise self.error
-        return self.s3_path
+        return self.plan
 
 
 class StubUserRepository:
@@ -32,73 +47,79 @@ class StubUserRepository:
         self.db = db
 
 
+class StubUserService:
+    def __init__(self, repository):
+        self.repository = repository
+
+
 @pytest.fixture
-def patched_user_repository(monkeypatch):
-    """The handler builds `UserRepository(db)` inline; swap it for a stub."""
+def patched_user_service(monkeypatch):
+    """The handler builds the user service inline; swap both halves out."""
     monkeypatch.setattr(improvement_plan_handlers, "UserRepository", StubUserRepository)
-    return StubUserRepository
+    monkeypatch.setattr(improvement_plan_handlers, "UserService", StubUserService)
+    return StubUserService
 
 
-def build_client(service=None, db="fake-db"):
+def build_analyzer_factory():
+    return lambda: "analyzer"
+
+
+def build_client(service=None, db="fake-db", analyzer_factory=build_analyzer_factory()):
     app = FastAPI()
     app.include_router(improvement_plan_handlers.router)
     app.state.db = db
+    if analyzer_factory is not None:
+        app.state.aeko_inventory_analyzer_factory = analyzer_factory
     if service is not None:
-        app.dependency_overrides[improvement_plan_handlers.get_session_service] = lambda: service
+        app.dependency_overrides[improvement_plan_handlers.get_improvement_plan_service] = lambda: service
     return TestClient(app)
 
 
-def test_input_report_returns_path_and_file_name(patched_user_repository):
-    service = StubReportService(s3_path="s3://reports-bucket/reports/output/u1/202607261430.pdf")
+# ---------------------------------------------------------------------------
+# The happy path
+# ---------------------------------------------------------------------------
+def test_input_report_returns_the_created_plan(patched_user_service):
+    service = StubReportService()
+
     response = build_client(service).post(ROUTE, params=REQUIRED_PARAMS)
 
     assert response.status_code == 200
     assert response.json() == {
-        "s3_path": "s3://reports-bucket/reports/output/u1/202607261430.pdf",
-        "file_name": "202607261430.pdf",
+        "id": "65a8b3d6c0f8e1d7f4b2c020",
+        "id_external_inventory": 502,
+        "id_external_unit": 77,
+        "defined_problem": "high scope 1 emissions",
+        "method": "replace the boiler fleet",
+        "reasoning": "direct combustion dominates the inventory",
     }
 
 
-def test_input_report_forwards_all_optional_identifiers(patched_user_repository):
-    service = StubReportService(s3_path="s3://bucket/out.pdf")
-    build_client(service).post(
-        ROUTE,
-        params={
-            **REQUIRED_PARAMS,
-            "id_gas_reduction": 9001,
-            "id_department": 12,
-            "id_external_user_owner": 12345,
-            "id_external_user_validator": 12346,
-            "id_external_input_report": 777,
-        },
-    )
+def test_input_report_forwards_what_the_flow_needs(patched_user_service):
+    service = StubReportService()
 
-    s3, id_user, id_gas_reduction, user_service, *rest = service.calls[0]
-    assert s3 == REQUIRED_PARAMS["s3"]
-    assert id_user == "u1"
-    assert id_gas_reduction == 9001
-    assert rest == [12, 12345, 12346, 777]
-
-
-def test_input_report_defaults_optional_identifiers_to_none(patched_user_repository):
-    service = StubReportService(s3_path="s3://bucket/out.pdf")
     build_client(service).post(ROUTE, params=REQUIRED_PARAMS)
 
-    _, _, id_gas_reduction, _, *rest = service.calls[0]
-    assert id_gas_reduction is None
-    assert rest == [None, None, None, None]
+    id_external_inventory, id_external_unit, id_user, user_service, analyzer_factory = service.calls[0]
+    assert (id_external_inventory, id_external_unit, id_user) == (502, 77, "u1")
+    assert isinstance(user_service, StubUserService)
+    assert callable(analyzer_factory)
 
 
-def test_input_report_maps_value_error_to_400(patched_user_repository):
-    service = StubReportService(error=ValueError("Invalid s3 path."))
+# ---------------------------------------------------------------------------
+# What the caller is told when it goes wrong
+# ---------------------------------------------------------------------------
+def test_input_report_maps_value_error_to_400(patched_user_service):
+    service = StubReportService(error=ValueError("id_external_inventory is required."))
+
     response = build_client(service).post(ROUTE, params=REQUIRED_PARAMS)
 
     assert response.status_code == 400
-    assert response.json()["detail"] == "Invalid s3 path."
+    assert response.json()["detail"] == "id_external_inventory is required."
 
 
-def test_input_report_maps_unexpected_error_to_500(patched_user_repository):
+def test_input_report_maps_unexpected_error_to_500(patched_user_service):
     service = StubReportService(error=RuntimeError("analyzer down"))
+
     response = build_client(service).post(ROUTE, params=REQUIRED_PARAMS)
 
     assert response.status_code == 500
@@ -112,9 +133,29 @@ def test_input_report_returns_503_when_database_is_not_initialized():
     assert response.json()["detail"] == "Database is not initialized"
 
 
-@pytest.mark.parametrize("missing", ["s3", "id_user"])
-def test_input_report_requires_mandatory_query_params(missing, patched_user_repository):
+def test_input_report_returns_500_when_the_sdk_was_never_configured(patched_user_service):
+    """The analyzer factory is published by the lifespan; without it there is
+    no SDK to run the report through."""
+    response = build_client(StubReportService(), analyzer_factory=None).post(ROUTE, params=REQUIRED_PARAMS)
+
+    assert response.status_code == 500
+    assert response.json()["detail"] == "Aeko SDK is not initialized"
+
+
+@pytest.mark.parametrize("missing", list(REQUIRED_PARAMS))
+def test_input_report_requires_every_parameter(missing, patched_user_service):
     params = {key: value for key, value in REQUIRED_PARAMS.items() if key != missing}
-    response = build_client(StubReportService(s3_path="s3://bucket/out.pdf")).post(ROUTE, params=params)
+
+    response = build_client(StubReportService()).post(ROUTE, params=params)
+
+    assert response.status_code == 422
+
+
+@pytest.mark.parametrize("param", ["id_external_inventory", "id_external_unit"])
+def test_the_external_identifiers_must_be_numbers(param, patched_user_service):
+    """Both reference Postgres, and the SDK takes the inventory's as an int."""
+    params = {**REQUIRED_PARAMS, param: "not-a-number"}
+
+    response = build_client(StubReportService()).post(ROUTE, params=params)
 
     assert response.status_code == 422

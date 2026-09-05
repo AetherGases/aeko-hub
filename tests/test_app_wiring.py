@@ -12,6 +12,9 @@ import pytest
 from fastapi import FastAPI, HTTPException
 from fastapi.testclient import TestClient
 
+from improvement_plan.database.repository import Repository as ImprovementPlanRepository
+from improvement_plan.integration.ms_inventory import Repository as InventoryRepository
+from improvement_plan.service import Service as ImprovementPlanService
 from internal.http import improvement_plan_handlers, session_handlers, user_handlers
 from session.database.repository import Repository as SessionRepository
 from session.service import Service as SessionService
@@ -67,7 +70,10 @@ def test_every_documented_route_is_registered(api_main, path):
 
 def test_report_route_is_reachable(api_main):
     with TestClient(api_main.app) as client:
-        response = client.post(REPORT_ROUTE, params={"s3": "reports/input/u1/input.pdf", "id_user": "u1"})
+        response = client.post(
+            REPORT_ROUTE,
+            params={"id_external_inventory": 502, "id_external_unit": 77, "id_user": "u1"},
+        )
 
     assert response.status_code != 404
 
@@ -121,11 +127,13 @@ def test_session_dependency_builds_a_service_backed_by_the_concrete_repository()
     assert isinstance(service.repository, SessionRepository)
 
 
-def test_report_dependency_builds_a_service_backed_by_the_concrete_repository():
-    service = improvement_plan_handlers.get_session_service(request_with(StubDatabase()))
+def test_report_dependency_builds_a_service_backed_by_the_concrete_repositories():
+    """Two of them: the plans live in Mongo, the inventory in ms-inventory."""
+    service = improvement_plan_handlers.get_improvement_plan_service(request_with(StubDatabase()))
 
-    assert isinstance(service, SessionService)
-    assert isinstance(service.repository, SessionRepository)
+    assert isinstance(service, ImprovementPlanService)
+    assert isinstance(service.repository, ImprovementPlanRepository)
+    assert isinstance(service.inventory_repository, InventoryRepository)
 
 
 @pytest.mark.parametrize(
@@ -133,7 +141,7 @@ def test_report_dependency_builds_a_service_backed_by_the_concrete_repository():
     [
         user_handlers.get_user_service,
         session_handlers.get_session_service,
-        improvement_plan_handlers.get_session_service,
+        improvement_plan_handlers.get_improvement_plan_service,
     ],
 )
 def test_dependencies_reject_an_uninitialized_database(dependency):

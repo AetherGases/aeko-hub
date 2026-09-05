@@ -14,13 +14,17 @@ class StubCollection:
         self.error = error
         self.inserted_id = inserted_id
         self.calls = []
+        self.find_options = []
 
     def _record(self, name, *args):
         self.calls.append((name, *args))
         if self.error is not None:
             raise self.error
 
-    def find(self, query=None, projection=None):
+    def find(self, query=None, projection=None, **options):
+        # `sort` and `limit` travel beside the recorded call rather than in it:
+        # the callers that read `call_args("find")` unpack exactly two values.
+        self.find_options.append(options)
         self._record("find", query, projection)
         return iter(self.find_result)
 

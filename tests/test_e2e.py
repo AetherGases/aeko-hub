@@ -19,7 +19,9 @@ from pathlib import Path
 import pytest
 from fastapi.testclient import TestClient
 
-from internal.http import session_handlers, user_handlers
+from improvement_plan.entity import ImprovementPlan
+from improvement_plan.service import Service as ImprovementPlanService
+from internal.http import improvement_plan_handlers, session_handlers, user_handlers
 from session.entity import Message, Session
 from session.service import Service as SessionService
 from user.entity import User, UserMemory
@@ -27,6 +29,12 @@ from user.service import Service as UserService
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 SUBMITTED_AT = datetime(2026, 7, 26, 14, 30, 0)
+
+# The report journey: one inventory of one unit, resolved as Markdown by the
+# ms-inventory microservice.
+ID_INVENTORY = 502
+ID_UNIT = 77
+INVENTORY_MARKDOWN = "## Escopo 1\n\n| Fonte | tCO2e |\n| --- | --- |\n| Caldeira | 12400 |"
 
 # The five agents the gateway registers tools for, spelled as the SDK's
 # routing keys.
@@ -97,6 +105,41 @@ class InMemorySessionRepository:
         self.sessions[id_session].name = name
 
 
+class InMemoryImprovementPlanRepository:
+    def __init__(self, plans=None):
+        self.plans = list(plans or [])
+
+    def get_by_id_external_inventory(self, id_external_inventory):
+        plan = next(
+            (p for p in self.plans if p.id_external_inventory == id_external_inventory), None
+        )
+        if plan is None:
+            raise ValueError(f"Improvement plan with id_external_inventory {id_external_inventory} not found.")
+        return plan
+
+    def get_last_by_id_external_unit(self, id_external_unit, limit):
+        of_the_unit = [p for p in self.plans if p.id_external_unit == id_external_unit]
+        return sorted(of_the_unit, key=lambda plan: plan.updated_at, reverse=True)[:limit]
+
+    def create(self, improvement_plan):
+        improvement_plan.id = f"plan-{len(self.plans) + 1}"
+        improvement_plan.updated_at = improvement_plan.updated_at or datetime.utcnow()
+        self.plans.append(improvement_plan)
+        return improvement_plan
+
+
+class InMemoryInventoryRepository:
+    """Stands in for the ms-inventory microservice the gateway calls."""
+
+    def __init__(self, markdown=INVENTORY_MARKDOWN):
+        self.markdown = markdown
+        self.resolved = []
+
+    def get_inventory_markdown(self, id_external_inventory):
+        self.resolved.append(id_external_inventory)
+        return self.markdown
+
+
 @pytest.fixture
 def seeded_repositories():
     user = User(id="u1", id_external_user=12345, role="analyst", usecase="report_generation")
@@ -141,6 +184,39 @@ def live_app(api_main, seeded_repositories, monkeypatch):
     with TestClient(app) as client:
         yield client, api_main, user_repository, session_repository
     app.dependency_overrides.clear()
+
+
+@pytest.fixture
+def report_app(live_app, monkeypatch):
+    """The running app with the report flow's two repositories in memory.
+
+    Everything between the route and them is production code: the handler, the
+    service that used to live in `inventory_analysis`, and the analyzer the
+    lifespan publishes (the fake SDK's).
+    """
+    client, api_main, user_repository, _ = live_app
+    plan_repository = InMemoryImprovementPlanRepository()
+    inventory_repository = InMemoryInventoryRepository()
+
+    client.app.dependency_overrides[improvement_plan_handlers.get_improvement_plan_service] = (
+        lambda: ImprovementPlanService(plan_repository, inventory_repository)
+    )
+    # The handler builds its user repository inline, so it is not reachable
+    # through `dependency_overrides` either.
+    monkeypatch.setattr(improvement_plan_handlers, "UserRepository", lambda db: user_repository)
+
+    return client, api_main, plan_repository, inventory_repository
+
+
+def request_report(client, id_external_inventory=ID_INVENTORY, id_external_unit=ID_UNIT, id_user="u1"):
+    return client.post(
+        "/aether-api/v1/ai/report",
+        params={
+            "id_external_inventory": id_external_inventory,
+            "id_external_unit": id_external_unit,
+            "id_user": id_user,
+        },
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -547,15 +623,85 @@ def test_send_message_returns_502_when_the_guardrail_rejected_every_draft(live_a
     assert len(session_repository.get_session_messages("s1")) == 1
 
 
-def test_report_route_is_registered(live_app):
-    client, _, _, _ = live_app
+# ---------------------------------------------------------------------------
+# The report journey
+# ---------------------------------------------------------------------------
+def test_a_report_answers_with_the_plan_it_persisted(report_app):
+    client, _, plan_repository, _ = report_app
 
-    response = client.post(
-        "/aether-api/v1/ai/report",
-        params={"s3": "reports/input/u1/input.pdf", "id_user": "u1"},
+    response = request_report(client)
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["id_external_inventory"] == ID_INVENTORY
+    assert body["id_external_unit"] == ID_UNIT
+    assert body["defined_problem"] and body["method"] and body["reasoning"]
+    assert [plan.id for plan in plan_repository.plans] == [body["id"]]
+
+
+def test_the_inventory_is_resolved_by_the_microservice(report_app):
+    """No S3, no spreadsheet: the file belongs to ms-inventory now."""
+    client, _, _, inventory_repository = report_app
+
+    request_report(client)
+
+    assert inventory_repository.resolved == [ID_INVENTORY]
+
+
+def test_the_analyzer_reads_the_markdown_the_microservice_returned(report_app, fake_sdk):
+    client, *_ = report_app
+
+    request_report(client)
+
+    analyzer = fake_sdk.AekoInventoryAnalyzer.instances[-1]
+    inventory, id_external_inventory, id_request = analyzer.analyzed[0]
+    assert inventory == INVENTORY_MARKDOWN
+    assert id_external_inventory == ID_INVENTORY
+    assert id_request
+
+
+def test_the_last_two_plans_of_the_unit_become_the_analyzers_context(report_app, fake_sdk):
+    client, _, plan_repository, _ = report_app
+    plan_repository.plans.extend(
+        [
+            ImprovementPlan(id="p1", id_external_inventory=500, id_external_unit=ID_UNIT, defined_problem="oldest problem", method="oldest method", reasoning="oldest reasoning", updated_at=datetime(2026, 1, 1)),
+            ImprovementPlan(id="p2", id_external_inventory=501, id_external_unit=ID_UNIT, defined_problem="middle problem", method="middle method", reasoning="middle reasoning", updated_at=datetime(2026, 3, 1)),
+            ImprovementPlan(id="p3", id_external_inventory=499, id_external_unit=ID_UNIT + 1, defined_problem="another unit", method="another method", reasoning="another reasoning", updated_at=datetime(2026, 6, 1)),
+            ImprovementPlan(id="p4", id_external_inventory=498, id_external_unit=ID_UNIT, defined_problem="newest problem", method="newest method", reasoning="newest reasoning", updated_at=datetime(2026, 5, 1)),
+        ]
     )
 
-    assert response.status_code != 404
+    request_report(client)
+
+    context = fake_sdk.AekoInventoryAnalyzer.instances[-1].context
+    assert "newest problem" in context and "newest method" in context
+    assert "middle problem" in context and "middle reasoning" in context
+    # Only two, and only this unit's.
+    assert "oldest problem" not in context
+    assert "another unit" not in context
+
+
+def test_a_report_records_what_the_analysis_cost(report_app):
+    """The analytical flow reaches the SDK now, so it is tracked like the
+    conversational one."""
+    client, api_main, _, _ = report_app
+
+    response = request_report(client)
+
+    (document,) = stored_metrics(api_main)
+    assert document["flow"] == "analytical"
+    assert document["id_request"] == response.headers["x-request-id"]
+
+
+def test_the_plan_is_remembered_for_the_user_who_asked(report_app, live_app):
+    client, *_ = report_app
+    _, _, user_repository, _ = live_app
+
+    request_report(client)
+
+    memory = user_repository.memories[-1]
+    assert memory.id_user == "u1"
+    assert memory.field == "improvement_plan"
 
 
 # ---------------------------------------------------------------------------

@@ -226,16 +226,23 @@ paths:
       tags:
         - Reports
       summary: Generate an improvement plan report
-      description: Analyzes an input report, persists the derived improvement plan, and stores the generated output report in S3.
+      description: Resolves the inventory as Markdown through the ms-inventory microservice, runs it through the Aeko analyst flow with the unit's last two plans as context, and stores and returns the improvement plan that came out.
       operationId: generateImprovementPlanReport
       parameters:
-        - name: s3
+        - name: id_external_inventory
           in: query
           required: true
-          description: Input report bucket or S3 path used to load the source file.
+          description: Inventory identifier in the Aether platform, resolved through ms-inventory and filed against the resulting plan.
           schema:
-            type: string
-          example: reports/input/65a8b3d6c0f8e1d7f4b2c010/input.pdf
+            type: integer
+          example: 502
+        - name: id_external_unit
+          in: query
+          required: true
+          description: Unit the inventory belongs to, which is what the previous plans are read by.
+          schema:
+            type: integer
+          example: 77
         - name: id_user
           in: query
           required: true
@@ -243,66 +250,38 @@ paths:
           schema:
             type: string
           example: 65a8b3d6c0f8e1d7f4b2c010
-        - name: id_gas_reduction
-          in: query
-          required: false
-          description: Optional external gas reduction identifier used as context.
-          schema:
-            type: integer
-            nullable: true
-          example: 9001
-        - name: id_department
-          in: query
-          required: false
-          description: Optional department identifier associated with the output report.
-          schema:
-            type: integer
-            nullable: true
-          example: 12
-        - name: id_external_user_owner
-          in: query
-          required: false
-          description: Optional external owner identifier for the output report.
-          schema:
-            type: integer
-            nullable: true
-          example: 12345
-        - name: id_external_user_validator
-          in: query
-          required: false
-          description: Optional external validator identifier for the output report.
-          schema:
-            type: integer
-            nullable: true
-          example: 12346
-        - name: id_external_input_report
-          in: query
-          required: false
-          description: Optional external input report identifier.
-          schema:
-            type: integer
-            nullable: true
-          example: 777
       responses:
         '200':
-          description: Report generated successfully.
+          description: Improvement plan generated and stored.
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/ReportResponseData'
+                $ref: '#/components/schemas/ImprovementPlanResponseData'
               example:
-                s3_path: s3://reports-bucket/reports/output/65a8b3d6c0f8e1d7f4b2c010/202607261430.pdf
-                file_name: 202607261430.pdf
+                id: 65a8b3d6c0f8e1d7f4b2c020
+                id_external_inventory: 502
+                id_external_unit: 77
+                defined_problem: high scope 1 emissions
+                method: replace the boiler fleet
+                reasoning: direct combustion dominates the inventory
         '400':
-          description: One or more request parameters are invalid.
+          description: One or more request parameters are invalid, or the inventory has no content.
           content:
             application/json:
               schema:
                 $ref: '#/components/schemas/ErrorResponse'
               example:
-                detail: 'Error processing report: ...'
+                detail: ms-inventory answered inventory 502 without content.
+        '503':
+          description: Database connection is unavailable.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+              example:
+                detail: Database is not initialized
         '500':
-          description: Unexpected server error during report processing.
+          description: The Aeko SDK is not initialized or an unexpected error occurred.
           content:
             application/json:
               schema:
@@ -473,20 +452,43 @@ components:
           type: string
           description: Internal user identifier.
           example: 65a8b3d6c0f8e1d7f4b2c010
-    ReportResponseData:
+    ImprovementPlanResponseData:
       type: object
       properties:
-        s3_path:
+        id:
           type: string
-          description: S3 URI of the generated report.
-          example: s3://reports-bucket/reports/output/65a8b3d6c0f8e1d7f4b2c010/202607261430.pdf
-        file_name:
+          nullable: true
+          description: Identifier of the stored improvement plan.
+          example: 65a8b3d6c0f8e1d7f4b2c020
+        id_external_inventory:
+          type: integer
+          nullable: true
+          description: Analyzed inventory identifier in the Aether platform.
+          example: 502
+        id_external_unit:
+          type: integer
+          nullable: true
+          description: Unit the analyzed inventory belongs to.
+          example: 77
+        defined_problem:
           type: string
-          description: Generated PDF file name.
-          example: 202607261430.pdf
+          description: Problem the analysis identified.
+          example: high scope 1 emissions
+        method:
+          type: string
+          description: What the plan proposes doing about it.
+          example: replace the boiler fleet
+        reasoning:
+          type: string
+          description: Why that method addresses that problem.
+          example: direct combustion dominates the inventory
       required:
-        - s3_path
-        - file_name
+        - id
+        - id_external_inventory
+        - id_external_unit
+        - defined_problem
+        - method
+        - reasoning
     MetricResponseData:
       type: object
       properties:

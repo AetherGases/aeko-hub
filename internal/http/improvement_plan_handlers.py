@@ -1,77 +1,103 @@
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
+from fastapi.concurrency import run_in_threadpool
 from pydantic import BaseModel, Field
 
-from session.database.repository import Repository
-from session.service import Service
-from session.session import IService
+from improvement_plan.database.repository import Repository
+from improvement_plan.improvement_plan import IService
+from improvement_plan.integration.ms_inventory import Repository as InventoryRepository
+from improvement_plan.service import Service
 
 from user.database.repository import Repository as UserRepository
 from user.service import Service as UserService
 
 router = APIRouter(tags=["Reports"])
 
-class ReportResponseData(BaseModel):
-    s3_path: str = Field(..., description="S3 URI of the generated report.", example="s3://reports-bucket/reports/output/65a8b3d6c0f8e1d7f4b2c010/202607261430.pdf")
-    file_name: str = Field(..., description="Generated PDF file name.", example="202607261430.pdf")
+class ImprovementPlanResponseData(BaseModel):
+    id: str | None = Field(..., description="Identifier of the stored improvement plan.", example="65a8b3d6c0f8e1d7f4b2c020")
+    id_external_inventory: int | None = Field(..., description="Analyzed inventory identifier in the Aether platform.", example=502)
+    id_external_unit: int | None = Field(..., description="Unit the analyzed inventory belongs to.", example=77)
+    defined_problem: str = Field(..., description="Problem the analysis identified.", example="high scope 1 emissions")
+    method: str = Field(..., description="What the plan proposes doing about it.", example="replace the boiler fleet")
+    reasoning: str = Field(..., description="Why that method addresses that problem.", example="direct combustion dominates the inventory")
 
     class Config:
         frozen = True
 
 
 
-def get_session_service(request: Request) -> IService:
+def get_improvement_plan_service(request: Request) -> IService:
     database = request.app.state.db
     if database is None:
         raise HTTPException(status_code=503, detail="Database is not initialized")
-    return Service(Repository(database))
+    # Two repositories, two transports: the plans are in Mongo, and the
+    # inventory itself belongs to the ms-inventory microservice.
+    return Service(Repository(database), InventoryRepository())
 
 @router.post(
     "/aether-api/v1/ai/report",
-    response_model=ReportResponseData,
+    response_model=ImprovementPlanResponseData,
     summary="Generate an improvement plan report",
-    description="Analyzes an input report, persists the derived improvement plan, and stores the generated output report in S3.",
+    description=(
+        "Resolves the inventory as Markdown through the ms-inventory microservice, runs it "
+        "through the Aeko analyst flow with the unit's last two plans as context, and stores "
+        "and returns the improvement plan that came out."
+    ),
     responses={
         200: {
-            "description": "Report generated successfully.",
+            "description": "Improvement plan generated and stored.",
             "content": {
                 "application/json": {
                     "example": {
-                        "s3_path": "s3://reports-bucket/reports/output/65a8b3d6c0f8e1d7f4b2c010/202607261430.pdf",
-                        "file_name": "202607261430.pdf",
+                        "id": "65a8b3d6c0f8e1d7f4b2c020",
+                        "id_external_inventory": 502,
+                        "id_external_unit": 77,
+                        "defined_problem": "high scope 1 emissions",
+                        "method": "replace the boiler fleet",
+                        "reasoning": "direct combustion dominates the inventory",
                     }
                 }
             },
         },
-        400: {"description": "One or more request parameters are invalid."},
-        500: {"description": "Unexpected server error during report processing."},
+        400: {"description": "One or more request parameters are invalid, or the inventory has no content."},
+        503: {"description": "Database connection is unavailable."},
+        500: {"description": "The Aeko SDK is not initialized or an unexpected error occurred."},
     },
 )
-def input_report(
+async def input_report(
     request: Request,
-    s3: str = Query(..., description="Input report bucket or S3 path used to load the source file.", example="reports/input/65a8b3d6c0f8e1d7f4b2c010/input.pdf"),
+    id_external_inventory: int = Query(..., description="Inventory identifier in the Aether platform, resolved through ms-inventory and filed against the resulting plan.", example=502),
+    id_external_unit: int = Query(..., description="Unit the inventory belongs to, which is what the previous plans are read by.", example=77),
     id_user: str = Query(..., description="Internal user identifier responsible for the report.", example="65a8b3d6c0f8e1d7f4b2c010"),
-    id_gas_reduction: int | None = Query(None, description="Optional external gas reduction identifier used as context.", example=9001),
-    id_department: int | None = Query(None, description="Optional department identifier associated with the output report.", example=12),
-    id_external_user_owner: int | None = Query(None, description="Optional external owner identifier for the output report.", example=12345),
-    id_external_user_validator: int | None = Query(None, description="Optional external validator identifier for the output report.", example=12346),
-    id_external_input_report: int | None = Query(None, description="Optional external input report identifier.", example=777),
-    service: IService = Depends(get_session_service),
-) -> ReportResponseData:
+    service: IService = Depends(get_improvement_plan_service),
+) -> ImprovementPlanResponseData:
+    # A fresh analyzer per report, built by the factory the lifespan published:
+    # `set_context()` is instance state (see `cmd/api/main.py`).
+    aeko_inventory_analyzer_factory = request.app.state._state.get("aeko_inventory_analyzer_factory")
+
+    if not aeko_inventory_analyzer_factory:
+        raise HTTPException(status_code=500, detail="Aeko SDK is not initialized")
+
     try:
-        user_service = UserService(UserRepository(request.app.state.db))
-        s3_path = service.input_report(
-            s3, 
-            id_user, 
-            id_gas_reduction, 
-            user_service, 
-            id_department, 
-            id_external_user_owner, 
-            id_external_user_validator, 
-            id_external_input_report
+        # An analysis is a whole report long — several model calls, with the
+        # coordinator rewriting its answer when it comes back malformed — so it
+        # never runs on the event loop.
+        improvement_plan = await run_in_threadpool(
+            service.input_inventory,
+            id_external_inventory,
+            id_external_unit,
+            id_user,
+            UserService(UserRepository(request.app.state.db)),
+            aeko_inventory_analyzer_factory,
         )
-        file_name = s3_path.split("/")[-1]
-        return ReportResponseData(s3_path=s3_path, file_name=file_name)
+        return ImprovementPlanResponseData(
+            id=improvement_plan.id,
+            id_external_inventory=improvement_plan.id_external_inventory,
+            id_external_unit=improvement_plan.id_external_unit,
+            defined_problem=improvement_plan.defined_problem,
+            method=improvement_plan.method,
+            reasoning=improvement_plan.reasoning,
+        )
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     except Exception as exc:
-        raise HTTPException(status_code=500, detail=f"Error processing report: {exc}") from exc 
+        raise HTTPException(status_code=500, detail=f"Error processing report: {exc}") from exc
