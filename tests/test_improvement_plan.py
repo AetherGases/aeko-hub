@@ -416,6 +416,15 @@ def test_create_improvement_plan_query_stamps_a_missing_update_timestamp():
     assert isinstance(document["updated_at"], datetime)
 
 
+def test_create_improvement_plan_query_leaves_out_what_the_plan_does_not_carry():
+    """Mongo has no schema, so a null is a value every reader has to look
+    past. A field the plan has nothing for is simply absent."""
+    document = q.create_improvement_plan_query(ImprovementPlan(id_external_inventory=1))
+
+    assert "id_external_unit" not in document
+    assert None not in document.values()
+
+
 def test_create_improvement_plan_query_keeps_the_external_identifiers_numbers():
     """`id_external_inventory` and `id_external_unit` reference Postgres,
     never a Mongo `_id`."""

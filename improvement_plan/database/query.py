@@ -20,7 +20,7 @@ def get_last_by_id_external_unit_query(id_external_unit: int, limit: int) -> tup
 
 
 def create_improvement_plan_query(improvement_plan: ImprovementPlan) -> dict:
-	return {
+	document = {
 		"id_external_inventory": improvement_plan.id_external_inventory,
 		"id_external_unit": improvement_plan.id_external_unit,
 		"defined_problem": improvement_plan.defined_problem,
@@ -28,3 +28,8 @@ def create_improvement_plan_query(improvement_plan: ImprovementPlan) -> dict:
 		"reasoning": improvement_plan.reasoning,
 		"updated_at": improvement_plan.updated_at or datetime.utcnow(),
 	}
+
+	# Mongo has no schema, so a null is a value every reader has to look past.
+	# A field the plan has nothing for is left out of the document instead —
+	# `improvement_plan_from_data` reads it back as None either way.
+	return {field: value for field, value in document.items() if value is not None}
