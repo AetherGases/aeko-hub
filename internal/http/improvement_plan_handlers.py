@@ -2,7 +2,7 @@
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from fastapi.concurrency import run_in_threadpool
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 
 from improvement_plan.database.repository import Repository
 from improvement_plan.improvement_plan import IService, MalformedPlanError
@@ -15,15 +15,14 @@ from user.service import Service as UserService
 router = APIRouter(tags=["Reports"])
 
 class ImprovementPlanResponseData(BaseModel):
-    id: str | None = Field(..., description="Identifier of the stored improvement plan.", example="65a8b3d6c0f8e1d7f4b2c020")
-    id_external_inventory: int | None = Field(..., description="Analyzed inventory identifier in the Aether platform.", example=502)
-    id_external_unit: int | None = Field(..., description="Unit the analyzed inventory belongs to.", example=77)
-    defined_problem: str = Field(..., description="Problem the analysis identified.", example="high scope 1 emissions")
-    method: str = Field(..., description="What the plan proposes doing about it.", example="replace the boiler fleet")
-    reasoning: str = Field(..., description="Why that method addresses that problem.", example="direct combustion dominates the inventory")
+    id: str | None = Field(..., description="Identifier of the stored improvement plan.", json_schema_extra={"example": "65a8b3d6c0f8e1d7f4b2c020"})
+    id_external_inventory: int | None = Field(..., description="Analyzed inventory identifier in the Aether platform.", json_schema_extra={"example": 502})
+    id_external_unit: int | None = Field(..., description="Unit the analyzed inventory belongs to.", json_schema_extra={"example": 77})
+    defined_problem: str = Field(..., description="Problem the analysis identified.", json_schema_extra={"example": "high scope 1 emissions"})
+    method: str = Field(..., description="What the plan proposes doing about it.", json_schema_extra={"example": "replace the boiler fleet"})
+    reasoning: str = Field(..., description="Why that method addresses that problem.", json_schema_extra={"example": "direct combustion dominates the inventory"})
 
-    class Config:
-        frozen = True
+    model_config = ConfigDict(frozen=True)
 
 
 def get_improvement_plan_service(request: Request) -> IService:
@@ -67,9 +66,9 @@ def get_improvement_plan_service(request: Request) -> IService:
 )
 async def input_report(
     request: Request,
-    id_external_inventory: int = Query(..., description="Inventory identifier in the Aether platform, resolved through ms-inventory and filed against the resulting plan.", example=502),
-    id_external_unit: int = Query(..., description="Unit the inventory belongs to, which is what the previous plans are read by.", example=77),
-    id_user: str = Query(..., description="Internal user identifier responsible for the report.", example="65a8b3d6c0f8e1d7f4b2c010"),
+    id_external_inventory: int = Query(..., description="Inventory identifier in the Aether platform, resolved through ms-inventory and filed against the resulting plan.", examples=[502]),
+    id_external_unit: int = Query(..., description="Unit the inventory belongs to, which is what the previous plans are read by.", examples=[77]),
+    id_user: str = Query(..., description="Internal user identifier responsible for the report.", examples=["65a8b3d6c0f8e1d7f4b2c010"]),
     service: IService = Depends(get_improvement_plan_service),
 ) -> ImprovementPlanResponseData:
     """Generate an improvement report in a worker thread and translate domain errors to HTTP responses."""

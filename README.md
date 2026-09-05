@@ -37,7 +37,7 @@ their purpose. Keep implementation documentation in docstrings and omit code
 comments. Use constants for shared configuration or meaningful domain values;
 use environment variable names directly where an alias adds no information.
 
-Run the full suite with `python -m pytest -q`. Tests load the example configuration
+Run the full suite with `python -m pytest -q`. Tests load `tests/settings.env`
 to isolate constants from local settings, use SDK and database doubles,
 and disable MCP warm-up. `pytest.ini` disables the debugging plugin because the
 application's `cmd` package shadows the standard-library module used by `pdb`.

@@ -1,7 +1,7 @@
 """Expose HTTP endpoints and response models for SDK run metrics."""
 
 from fastapi import APIRouter, Depends, HTTPException, Request
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 
 from aeko_metrics.aeko_metrics import IService
 from aeko_metrics.database.repository import Repository
@@ -10,26 +10,24 @@ from aeko_metrics.service import Service
 router = APIRouter(tags=["Metrics"])
 
 class AgentMetricResponseData(BaseModel):
-    name: str = Field(..., description="Agent that was invoked, under the exact name the SDK's graph routes it by.", example="Analista de Poluentes")
-    input_tokens: int = Field(..., description="Prompt tokens this single invocation consumed, its whole tool-calling loop included.", example=11)
-    output_tokens: int = Field(..., description="Completion tokens this single invocation produced.", example=22)
-    llm: str = Field(..., description="Model that served the invocation. More than one name when the SDK's cross-model fallback fired inside the call.", example="gemini-3.5-flash")
-    used_tools: list[str] = Field(..., description="Tools the agent actually called, in call order — not the ones registered for it.", example=["climatiq_search", "calculator"])
+    name: str = Field(..., description="Agent that was invoked, under the exact name the SDK's graph routes it by.", json_schema_extra={"example": "Analista de Poluentes"})
+    input_tokens: int = Field(..., description="Prompt tokens this single invocation consumed, its whole tool-calling loop included.", json_schema_extra={"example": 11})
+    output_tokens: int = Field(..., description="Completion tokens this single invocation produced.", json_schema_extra={"example": 22})
+    llm: str = Field(..., description="Model that served the invocation. More than one name when the SDK's cross-model fallback fired inside the call.", json_schema_extra={"example": "gemini-3.5-flash"})
+    used_tools: list[str] = Field(..., description="Tools the agent actually called, in call order — not the ones registered for it.", json_schema_extra={"example": ["climatiq_search", "calculator"]})
 
-    class Config:
-        frozen = True
+    model_config = ConfigDict(frozen=True)
 
 
 class AekoMetricResponseData(BaseModel):
-    id: str = Field(..., description="Identifier of the stored row.", example="65a8b3d6c0f8e1d7f4b2c0bb")
-    id_request: str = Field(..., description="The request this run belongs to, answered to its caller in the X-Request-Id header and stored as the identifier of its hub_metrics row.", example="65a8b3d6c0f8e1d7f4b2c0aa")
-    latency: int = Field(..., description="How long the whole SDK run took, in whole milliseconds.", example=4823)
-    error_description: str | None = Field(None, description="Why the run failed, or null when it did not. A conversational turn no reviewer approved is one of these: it delivers nothing, and this row is the only account left of what it cost.", example=None)
-    flow: str = Field(..., description="Which entry point served it: conversational for a chat turn, analytical for an inventory analysis.", example="conversational")
+    id: str = Field(..., description="Identifier of the stored row.", json_schema_extra={"example": "65a8b3d6c0f8e1d7f4b2c0bb"})
+    id_request: str = Field(..., description="The request this run belongs to, answered to its caller in the X-Request-Id header and stored as the identifier of its hub_metrics row.", json_schema_extra={"example": "65a8b3d6c0f8e1d7f4b2c0aa"})
+    latency: int = Field(..., description="How long the whole SDK run took, in whole milliseconds.", json_schema_extra={"example": 4823})
+    error_description: str | None = Field(None, description="Why the run failed, or null when it did not. A conversational turn no reviewer approved is one of these: it delivers nothing, and this row is the only account left of what it cost.", json_schema_extra={"example": None})
+    flow: str = Field(..., description="Which entry point served it: conversational for a chat turn, analytical for an inventory analysis.", json_schema_extra={"example": "conversational"})
     used_agents: list[AgentMetricResponseData] = Field(..., description="One entry per agent invocation, in call order. An agent a reviewer's retry loop called again is listed again.")
 
-    class Config:
-        frozen = True
+    model_config = ConfigDict(frozen=True)
 
 
 def get_aeko_metrics_service(request: Request) -> IService:

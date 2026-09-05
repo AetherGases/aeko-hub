@@ -1,7 +1,7 @@
 """Expose HTTP endpoints and response models for HTTP request metrics."""
 
 from fastapi import APIRouter, Depends, HTTPException, Request
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 
 from hub_metrics.database.repository import Repository
 from hub_metrics.hub_metrics import IService
@@ -10,13 +10,12 @@ from hub_metrics.service import Service
 router = APIRouter(tags=["Metrics"])
 
 class MetricResponseData(BaseModel):
-    id: str = Field(..., description="Identifier of the tracked request, answered to its caller in the X-Request-Id header.", example="65a8b3d6c0f8e1d7f4b2c0aa")
-    latency: str = Field(..., description="How long the request took, in milliseconds.", example="12.4ms")
-    response_status: int = Field(..., description="HTTP status the request answered with.", example=200)
-    endpoint: str = Field(..., description="Route template the request matched.", example="/aether-api/v1/ai/user/{id_external_user}")
+    id: str = Field(..., description="Identifier of the tracked request, answered to its caller in the X-Request-Id header.", json_schema_extra={"example": "65a8b3d6c0f8e1d7f4b2c0aa"})
+    latency: str = Field(..., description="How long the request took, in milliseconds.", json_schema_extra={"example": "12.4ms"})
+    response_status: int = Field(..., description="HTTP status the request answered with.", json_schema_extra={"example": 200})
+    endpoint: str = Field(..., description="Route template the request matched.", json_schema_extra={"example": "/aether-api/v1/ai/user/{id_external_user}"})
 
-    class Config:
-        frozen = True
+    model_config = ConfigDict(frozen=True)
 
 
 def get_hub_metrics_service(request: Request) -> IService:

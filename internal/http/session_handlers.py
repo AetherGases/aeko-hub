@@ -4,7 +4,7 @@ from datetime import datetime
 
 from fastapi import APIRouter, Depends, HTTPException, Path, Request
 from fastapi.concurrency import run_in_threadpool
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 
 from session.database.repository import Repository
 from session.service import Service
@@ -15,16 +15,15 @@ from user.database.repository import Repository as UserRepository
 router = APIRouter(tags=["Sessions"])
 
 class SessionResponseData(BaseModel):
-    id: str = Field(..., description="Internal session identifier.", example="65a8b3d6c0f8e1d7f4b2c001")
-    name: str = Field(..., description="Human-readable session name.", example="Weekly emissions review")
+    id: str = Field(..., description="Internal session identifier.", json_schema_extra={"example": "65a8b3d6c0f8e1d7f4b2c001"})
+    name: str = Field(..., description="Human-readable session name.", json_schema_extra={"example": "Weekly emissions review"})
 
-    class Config:
-        frozen = True
+    model_config = ConfigDict(frozen=True)
 
 class MessageResponseData(BaseModel):
-    input_message: str = Field(..., description="Input text sent to the AI agent.", example="Summarize this session.")
-    output_message: str = Field(..., description="Output returned by the AI agent.", example="Here is the summary.")
-    submitted_at: datetime = Field(..., description="Timestamp when the message was submitted.", example="2026-07-26T14:30:00Z")
+    input_message: str = Field(..., description="Input text sent to the AI agent.", json_schema_extra={"example": "Summarize this session."})
+    output_message: str = Field(..., description="Output returned by the AI agent.", json_schema_extra={"example": "Here is the summary."})
+    submitted_at: datetime = Field(..., description="Timestamp when the message was submitted.", json_schema_extra={"example": "2026-07-26T14:30:00Z"})
 
 def get_session_service(request: Request) -> IService:
     """Build the session service from the application database, or raise HTTP 503."""
@@ -59,7 +58,7 @@ def get_session_service(request: Request) -> IService:
     },
 )
 def get_user_sessions(
-    id_user: str = Path(..., description="Internal user identifier.", example="65a8b3d6c0f8e1d7f4b2c010"),
+    id_user: str = Path(..., description="Internal user identifier.", examples=["65a8b3d6c0f8e1d7f4b2c010"]),
     service: IService = Depends(get_session_service),
 ) -> list[SessionResponseData]:
     """Retrieve the sessions belonging to a user."""
@@ -97,7 +96,7 @@ def get_user_sessions(
     },
 )
 def get_session_messages(
-    id_session: str = Path(..., description="Internal session identifier.", example="65a8b3d6c0f8e1d7f4b2c001"),
+    id_session: str = Path(..., description="Internal session identifier.", examples=["65a8b3d6c0f8e1d7f4b2c001"]),
     service: IService = Depends(get_session_service),
 ) -> list[MessageResponseData]:
     """Retrieve the stored messages for a session."""
