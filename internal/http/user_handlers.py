@@ -1,5 +1,7 @@
+"""Expose HTTP endpoints and response models for users and memories."""
+
 from fastapi import APIRouter, Depends, HTTPException, Path, Request
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 
 from user.database.repository import Repository
 from user.service import Service
@@ -8,15 +10,15 @@ from user.user import IService
 router = APIRouter(tags=["Users"])
 
 class UserResponseData(BaseModel):
-    id_external_user: int = Field(..., description="External identifier of the user.", example=12345)
-    role: str = Field(..., description="Role assigned to the user.", example="analyst")
-    usecase: str = Field(..., description="User use case or profile category.", example="report_generation")
+    id_external_user: int = Field(..., description="External identifier of the user.", json_schema_extra={"example": 12345})
+    role: str = Field(..., description="Role assigned to the user.", json_schema_extra={"example": "analyst"})
+    usecase: str = Field(..., description="User use case or profile category.", json_schema_extra={"example": "report_generation"})
 
-    class Config:
-        frozen = True
+    model_config = ConfigDict(frozen=True)
 
 
 def get_user_service(request: Request) -> IService:
+    """Build the user service from the application database, or raise HTTP 503."""
     database = request.app.state.db
     if database is None:
         raise HTTPException(status_code=503, detail="Database is not initialized")
@@ -47,9 +49,10 @@ def get_user_service(request: Request) -> IService:
     },
 )
 def get_user(
-    id_external_user: int = Path(..., description="External user identifier.", example=12345),
+    id_external_user: int = Path(..., description="External user identifier.", examples=[12345]),
     service: IService = Depends(get_user_service),
 ) -> UserResponseData:
+    """Retrieve a user by external identifier."""
     try:
         user = service.get_mongo_user(id_external_user)
         return UserResponseData(

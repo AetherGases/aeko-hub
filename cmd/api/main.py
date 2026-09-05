@@ -1,3 +1,10 @@
+"""Compose the FastAPI application, domain services, and Aeko SDK adapters.
+
+This is the only module that imports the SDK. Configuration is captured after
+loading the environment; the application lifespan initializes the database,
+agent tools, and metric sinks and closes database and MCP connections.
+"""
+
 from contextlib import asynccontextmanager
 import os
 import threading
@@ -7,26 +14,44 @@ from fastapi import FastAPI
 from pymongo import MongoClient
 
 from cmd.api.integrations.climatiq_api import get_climatiq_tools
-from cmd.api.mcp.chroma_mcp import CHROMA_SESSION, get_gases_info_tools
-from cmd.api.mcp.mongo_mcp import (
+from cmd.api.integrations.mcp.chroma_mcp import CHROMA_SESSION, get_gases_info_tools
+from cmd.api.integrations.mcp.mongo_mcp import (
     MONGO_SESSION,
     get_improvement_plan_tools,
     get_user_memory_tools,
 )
-from cmd.api.mcp.tavily_mcp import (
+from cmd.api.integrations.mcp.tavily_mcp import (
     TAVILY_SESSION,
     get_tavily_search_tools,
     get_tavily_site_map_tool,
 )
 from cmd.api.tools.calculator import get_calculator_tools
 from cmd.api.tools.finance import get_roi_payback_tools
+from aeko_metrics.database.repository import Repository as AekoMetricsRepository
+from aeko_metrics.entity import AgentMetric, Metric as AekoMetric
+from aeko_metrics.service import Service as AekoMetricsService
+from hub_metrics.database.repository import Repository as HubMetricsRepository
+from hub_metrics.entity import Metric
+from hub_metrics.service import Service as HubMetricsService
+from improvement_plan.improvement_plan import MalformedPlanError
+from internal.http.aeko_metrics_handlers import router as aeko_metrics_router
+from internal.http.hub_metrics_handlers import router as hub_metrics_router
 from internal.http.improvement_plan_handlers import router as improvement_plan_router
 from internal.http.session_handlers import router as session_router
 from internal.http.user_handlers import router as user_router
+from internal.shared import (
+    Event,
+    Module,
+    RequestLogMiddleware,
+    log_failure,
+    operation,
+    set_aeko_metrics_sink,
+    set_event_sink,
+    silence_uvicorn_access_log,
+)
+from session.session import GuardrailRejectedError
 
-# Single entry point for all aeko imports. Every other module receives
-# SDK instances/DTOs through dependency injection instead of importing the
-# package directly.
+
 from aeko import (
     Aeko,
     AekoInventoryAnalyzer,
@@ -36,6 +61,7 @@ from aeko import (
     AekoTool,
     AekoUser,
     AekoUserMemory,
+    MalformedAgentOutputError,
 )
 
 load_dotenv()
@@ -43,53 +69,36 @@ load_dotenv()
 MONGO_URI = os.getenv("MONGO_URI")
 DB_NAME = os.getenv("DB_NAME")
 
-# The SDK never reads the environment: this application owns its configuration
-# and passes it in through `Aeko.config()`. Only the key is required — every
-# other setting falls back to the SDK's own default when left unset.
+
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
 AEKO_FAST_MODEL = os.getenv("AEKO_FAST_MODEL")
 AEKO_SLOW_MODEL = os.getenv("AEKO_SLOW_MODEL")
 AEKO_MAX_TOKENS = os.getenv("AEKO_MAX_TOKENS")
 AEKO_REPORT_MAX_TOKENS = os.getenv("AEKO_REPORT_MAX_TOKENS")
 
-# Tools coming from MCP servers, wrapped as `AekoTool` here — the one place
-# that imports `aeko` — so agent modules only ever hand back plain LangChain
-# tools (see `cmd/api/mcp/tavily_mcp.py`).
+
 TAVILY_SITE_MAP_TOOLS = [AekoTool(tool=tool) for tool in get_tavily_site_map_tool()]
 TAVILY_RESEARCH_TOOLS = [AekoTool(tool=tool) for tool in get_tavily_search_tools()]
 
-# MongoDB MCP: read-only `find`, each pinned in code to one collection (see
-# cmd/api/mcp/mongo_mcp.py) — an agent never chooses the collection itself.
+
 IMPROVEMENT_PLAN_TOOLS = [AekoTool(tool=tool) for tool in get_improvement_plan_tools()]
 USER_MEMORY_TOOLS = [AekoTool(tool=tool) for tool in get_user_memory_tools()]
 
-# ChromaDB MCP: vector search over the `gases-info` collection, pinned in code
-# (see cmd/api/mcp/chroma_mcp.py). Only the green gas analyst gets it.
+
 GASES_INFO_TOOLS = [AekoTool(tool=tool) for tool in get_gases_info_tools()]
 
-# Climatiq's emission factor search and calculator, reached over plain HTTPS
-# rather than MCP (see cmd/api/integrations/climatiq_api.py). Only the
-# pollutant analyst gets them.
+
 CLIMATIQ_TOOLS = [AekoTool(tool=tool) for tool in get_climatiq_tools()]
 
-# Arithmetic, computed in this process (see cmd/api/tools/calculator.py). The
-# one tool below that is nobody's speciality: every agent quotes numbers, and
-# a language model arriving at them by predicting digits is every agent's way
-# of being confidently wrong.
+
 CALCULATOR_TOOLS = [AekoTool(tool=tool) for tool in get_calculator_tools()]
 
-# ROI and payback over a fixed 60-month horizon, computed in this process as
-# well (see cmd/api/tools/finance.py). Only the improvement coordinator
-# gets them: it is the one agent that proposes spending money, and these are
-# the two questions its proposals are judged by.
+
 ROI_PAYBACK_TOOLS = [AekoTool(tool=tool) for tool in get_roi_payback_tools()]
 
-# Tools must follow the defined interfaces in Aeko SDK. The keys are the
-# agents' own names, which is what the graph routes by — pass them exactly as
-# the SDK spells them, accents included. `set_tools()` replaces the whole
-# registry, so every agent's tools travel in the single call below.
+
 AEKO_TOOLS = {
-    # FAQ only maps the Aether website — it never gets a free-form search tool.
+
     "FAQ": list(TAVILY_SITE_MAP_TOOLS)
     + list(TAVILY_RESEARCH_TOOLS)
     + list(USER_MEMORY_TOOLS)
@@ -97,19 +106,19 @@ AEKO_TOOLS = {
     "Análista de inventários": list(IMPROVEMENT_PLAN_TOOLS)
     + list(USER_MEMORY_TOOLS)
     + list(CALCULATOR_TOOLS),
-    # The only agent that calculates emissions through Climatiq.
+
     "Analista de Poluentes": list(TAVILY_RESEARCH_TOOLS)
     + list(IMPROVEMENT_PLAN_TOOLS)
     + list(USER_MEMORY_TOOLS)
     + list(CLIMATIQ_TOOLS)
     + list(CALCULATOR_TOOLS),
-    # The only agent that reads the `gases-info` vector store.
+
     "Analista de Gases Verdes": list(TAVILY_RESEARCH_TOOLS)
     + list(IMPROVEMENT_PLAN_TOOLS)
     + list(USER_MEMORY_TOOLS)
     + list(GASES_INFO_TOOLS)
     + list(CALCULATOR_TOOLS),
-    # The only agent that weighs an investment before proposing it.
+
     "Coordenador de Melhoria Contínua": list(TAVILY_RESEARCH_TOOLS)
     + list(IMPROVEMENT_PLAN_TOOLS)
     + list(USER_MEMORY_TOOLS)
@@ -117,13 +126,10 @@ AEKO_TOOLS = {
     + list(ROI_PAYBACK_TOOLS),
 }
 
-# Every MCP server this application talks to keeps one session open for the
-# life of the process (see `cmd/api/mcp/mcp_session.py`).
+
 MCP_SESSIONS = (TAVILY_SESSION, MONGO_SESSION, CHROMA_SESSION)
 
-# Opening those sessions starts the server processes, which is the whole cost
-# of a cold start — for Chroma, importing torch and loading model weights. The
-# test suite sets this to "false" so running the tests never spawns a server.
+
 MCP_WARM_UP = os.getenv("AEKO_MCP_WARM_UP", "true")
 
 mongo_client = None
@@ -135,32 +141,69 @@ def _int_or_none(value: str | None) -> int | None:
 
 
 def _warm_up_mcp_sessions() -> None:
-    """Start every MCP server now, in the background.
-
-    In the background because the sessions must not hold up the port: the API
-    answers immediately, and the servers finish waking while the first user is
-    still typing. A session that fails to open is reported and left alone —
-    the call that needs it will try again and raise properly.
-    """
+    """Start each MCP session in a background thread without delaying API startup."""
 
     def warm_up(session) -> None:
+        """Start an MCP session and log a failed warm-up without stopping the API."""
         try:
             session.start()
         except Exception as exc:
-            print(f"MCP warm-up failed for {session.name}: {type(exc).__name__}: {exc}")
+            log_failure(
+                Module.MCP,
+                f"{session.name}.warm_up gave up: {type(exc).__name__}: {exc}",
+            )
 
     for session in MCP_SESSIONS:
         threading.Thread(target=warm_up, args=(session,), daemon=True).start()
 
 
-def build_messenger(user, memories) -> AekoMessenger:
-    """A messenger for one user, built per request.
+def _carrying_tracking(error: Exception, cause: MalformedAgentOutputError) -> Exception:
+    """Copy SDK run metrics to the translated domain exception."""
 
-    It holds only *who* is asking: the conversation travels with each
-    `send_message()` call instead, so nothing about a session is retained
-    between requests and any worker can serve any conversation.
-    """
-    return AekoMessenger(
+    error.aeko_metrics = getattr(cause, "aeko_metrics", None)
+    return error
+
+
+class _Messenger(AekoMessenger):
+    """Adapt SDK conversation errors to domain errors while retaining run metrics."""
+
+    def send_message(self, message, session, *, id_request):
+        """Send a conversation turn and translate SDK review errors while retaining metrics."""
+        try:
+            return super().send_message(message, session, id_request=id_request)
+        except MalformedAgentOutputError as exc:
+            raise _carrying_tracking(
+                GuardrailRejectedError(
+                    "No answer for this turn was approved by the output guardrail "
+                    "or the response checker. Please rephrase."
+                ),
+                exc,
+            ) from exc
+
+
+class _InventoryAnalyzer(AekoInventoryAnalyzer):
+    """Adapt SDK analysis errors to domain errors while retaining run metrics."""
+
+    def analyze(self, inventory, *, id_external_inventory, id_request):
+        """Analyze an inventory and translate malformed SDK output to a domain error."""
+        try:
+            return super().analyze(
+                inventory,
+                id_external_inventory=id_external_inventory,
+                id_request=id_request,
+            )
+        except MalformedAgentOutputError as exc:
+            raise _carrying_tracking(
+                MalformedPlanError(
+                    "The analysis produced no plan in the shape a report is stored in."
+                ),
+                exc,
+            ) from exc
+
+
+def build_messenger(user, memories) -> AekoMessenger:
+    """Build a request-specific SDK messenger from the user and valid memories."""
+    return _Messenger(
         AekoUser(
             id=user.id,
             id_external_user=user.id_external_user,
@@ -182,7 +225,7 @@ def build_messenger(user, memories) -> AekoMessenger:
 
 
 def build_session(session) -> AekoSession:
-    """The session document the SDK reads the conversation from and appends to."""
+    """Convert a domain session and its messages to the SDK session representation."""
     return AekoSession(
         id=session.id,
         id_user=session.id_user,
@@ -192,9 +235,6 @@ def build_session(session) -> AekoSession:
                 input=message.input,
                 output=message.output,
                 submitted_at=message.submitted_at,
-                llm=message.llm,
-                input_tokens=message.input_tokens,
-                output_tokens=message.output_tokens,
             )
             for message in session.messages
         ],
@@ -203,21 +243,77 @@ def build_session(session) -> AekoSession:
     )
 
 
+def build_metric_sink(database):
+    """Build a callback that stores request events under their response identifiers."""
+
+    service = HubMetricsService(HubMetricsRepository(database))
+
+    def sink(event: Event) -> None:
+        """Persist the supplied tracking data through the configured metric service."""
+        service.add_metric(
+            Metric(
+
+                id=event.id_request,
+                latency=event.latency,
+                response_status=event.response_status,
+                endpoint=event.endpoint,
+            )
+        )
+
+    return sink
+
+
+def build_aeko_metrics_sink(database):
+    """Build a callback that stores SDK run metrics and agent invocations in call order."""
+
+    service = AekoMetricsService(AekoMetricsRepository(database))
+
+    def sink(metrics) -> None:
+        """Persist the supplied tracking data through the configured metric service."""
+        service.add_metric(
+            AekoMetric(
+
+                id_request=metrics.id_request,
+                latency=metrics.latency,
+                error_description=metrics.error_description,
+                flow=metrics.flow,
+                used_agents=[
+                    AgentMetric(
+                        name=agent.name,
+                        input_tokens=agent.input_tokens,
+                        output_tokens=agent.output_tokens,
+                        llm=agent.llm,
+                        used_tools=list(agent.used_tools),
+                    )
+
+                    for agent in metrics.used_agents
+                ],
+            )
+        )
+
+    return sink
+
+
 def build_inventory_analyzer() -> AekoInventoryAnalyzer:
-    """A fresh analyzer per report: `set_context()` is instance state."""
-    return AekoInventoryAnalyzer()
+    """Create an analyzer with independent context for one report."""
+    return _InventoryAnalyzer()
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    """Initialize database, SDK tools, and metric sinks, then release connections on shutdown."""
     global mongo_client, db
+
+    silence_uvicorn_access_log()
+
     mongo_client = MongoClient(MONGO_URI)
     db = mongo_client[DB_NAME]
     app.state.db = db
 
-    # Process-wide setup: exactly once, before the first request. Both calls
-    # rebuild every agent, so doing either per request would throw away warm
-    # agents for every concurrent run.
+    set_event_sink(build_metric_sink(db))
+
+    set_aeko_metrics_sink(build_aeko_metrics_sink(db))
+
     Aeko.config(
         GEMINI_API_KEY,
         fast_model=AEKO_FAST_MODEL,
@@ -227,16 +323,14 @@ async def lifespan(app: FastAPI):
     )
     AekoMessenger.set_tools(AEKO_TOOLS)
 
-    # The SDK objects are per-request, so what the application publishes are
-    # the factories that build them from this API's own entities.
     app.state._state["aeko_messenger_factory"] = build_messenger
     app.state._state["aeko_session_factory"] = build_session
     app.state._state["aeko_inventory_analyzer_factory"] = build_inventory_analyzer
 
     try:
-        db.command("ping")
+        with operation(Module.DATABASE, "mongo.ping"):
+            db.command("ping")
     except Exception as exc:
-        print(f"MongoDB error: {type(exc).__name__}: {exc}")
         raise RuntimeError(f"Failed to connect to MongoDB: {exc}") from exc
 
     if MCP_WARM_UP.strip().lower() not in {"false", "0", "no"}:
@@ -244,9 +338,9 @@ async def lifespan(app: FastAPI):
 
     yield
 
-    # Each open session owns a server process — the Chroma one holding a
-    # gigabyte of model weights. Closing them here is what keeps them from
-    # outliving the API.
+    set_event_sink(None)
+    set_aeko_metrics_sink(None)
+
     for session in MCP_SESSIONS:
         session.close()
 
@@ -265,15 +359,29 @@ OPENAPI_TAGS = [
         "name": "Reports",
         "description": "Endpoints for generating AI-assisted reports and improvement plans.",
     },
+    {
+        "name": "Metrics",
+        "description": "Endpoints for reading the event tracking bases behind the observability dashboard: what the gateway did with each request, and what the AI run inside it cost.",
+    },
 ]
 
 app = FastAPI(
     lifespan=lifespan,
     title="Aether AI Gateway",
     version="1.0.0",
-    description="HTTP API for user, session, and report workflows in the Aether core gateway.",
+    description=(
+        "HTTP API for user, session, and report workflows in the Aether core gateway. "
+        "Every response carries an X-Request-Id header: the identifier of that request "
+        "in the hub_metrics base."
+    ),
     openapi_tags=OPENAPI_TAGS,
 )
+
+
+app.add_middleware(RequestLogMiddleware)
+
 app.include_router(user_router)
 app.include_router(session_router)
 app.include_router(improvement_plan_router)
+app.include_router(hub_metrics_router)
+app.include_router(aeko_metrics_router)

@@ -1,21 +1,19 @@
+"""Define the domain entities for conversations and messages."""
+
 from datetime import datetime
 
 
 class Message:
+    """One exchanged turn: what was asked, what was answered, and when."""
+
     input: str
     output: str
     submitted_at: datetime
-    llm: str
-    input_tokens: int
-    output_tokens: int
 
-    def __init__(self, input: str, output: str, submitted_at: datetime, llm: str, input_tokens: int, output_tokens: int):
+    def __init__(self, input: str, output: str, submitted_at: datetime):
         self.input = input
         self.output = output
         self.submitted_at = submitted_at
-        self.llm = llm
-        self.input_tokens = input_tokens
-        self.output_tokens = output_tokens
 
 
 class Session:

@@ -1,3 +1,5 @@
+"""Define the domain entities for users and memories."""
+
 from datetime import datetime
 
 
@@ -30,12 +32,7 @@ class UserMemory:
         self.expires_at = expires_at
 
     def is_valid(self, now: datetime | None = None) -> bool:
-        """Whether this memory may still be shown to the agents.
-
-        Deciding it is the API's job: the SDK renders every memory it is
-        handed, `expires_at` included, so an expired row would go on being
-        remembered until something here filters it out.
-        """
+        """Return whether the memory has no expiration or expires after the supplied time."""
         if self.expires_at is None:
             return True
         return self.expires_at > (now or datetime.utcnow())

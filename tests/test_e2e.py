@@ -1,14 +1,4 @@
-"""End-to-end tests against the real application.
-
-The app is started through its real lifespan, with only two seams faked:
-
-* `aeko` — an external package, replaced suite-wide by `tests/fake_aeko.py`
-* `pymongo.MongoClient` — replaced by an in-memory double
-
-Everything else is production code: the real routers, the real dependency
-functions and the real service classes. The database seam is swapped for
-in-memory repositories so a journey can be followed without a Mongo server.
-"""
+"""Verify complete conversation and report flows with isolated external dependencies."""
 
 import re
 import threading
@@ -19,7 +9,9 @@ from pathlib import Path
 import pytest
 from fastapi.testclient import TestClient
 
-from internal.http import session_handlers, user_handlers
+from improvement_plan.entity import ImprovementPlan
+from improvement_plan.service import Service as ImprovementPlanService
+from internal.http import improvement_plan_handlers, session_handlers, user_handlers
 from session.entity import Message, Session
 from session.service import Service as SessionService
 from user.entity import User, UserMemory
@@ -28,8 +20,12 @@ from user.service import Service as UserService
 REPO_ROOT = Path(__file__).resolve().parents[1]
 SUBMITTED_AT = datetime(2026, 7, 26, 14, 30, 0)
 
-# The five agents the gateway registers tools for, spelled as the SDK's
-# routing keys.
+
+ID_INVENTORY = 502
+ID_UNIT = 77
+INVENTORY_MARKDOWN = "## Escopo 1\n\n| Fonte | tCO2e |\n| --- | --- |\n| Caldeira | 12400 |"
+
+
 TOOLED_AGENTS = {
     "FAQ",
     "Análista de inventários",
@@ -45,18 +41,22 @@ class InMemoryUserRepository:
         self.memories = list(memories or [])
 
     def get_user(self, id_external_user):
+        """Retrieve a user by external identifier."""
         user = self.users.get(id_external_user)
         if user is None:
             raise ValueError(f"User with id_external_user {id_external_user} not found.")
         return user
 
     def get_user_by_id(self, id_user):
+        """Retrieve a user by internal identifier, returning None when absent."""
         return next((user for user in self.users.values() if user.id == id_user), None)
 
     def get_user_memories(self, id_user):
+        """Retrieve the memories stored for a user."""
         return [memory for memory in self.memories if memory.id_user == id_user]
 
     def create_user_memory(self, user_memory):
+        """Persist a memory associated with a user."""
         self.memories.append(user_memory)
 
 
@@ -67,47 +67,91 @@ class InMemorySessionRepository:
         self.created_names = {}
 
     def get_user_sessions(self, id_user):
+        """Retrieve the sessions belonging to a user."""
         sessions = [s for s in self.sessions.values() if s.id_user == id_user]
         if not sessions:
             raise ValueError(f"No sessions found for user with id_user {id_user}.")
         return sessions
 
     def get_session(self, id_session):
+        """Retrieve a session by its internal identifier."""
         session = self.sessions.get(id_session)
         if session is None:
             raise ValueError(f"No session found with id_session {id_session}.")
         return session
 
     def get_session_messages(self, id_session):
+        """Retrieve the stored messages for a session."""
         return self.messages.get(id_session, [])
 
     def get_session_messages_count(self, id_session):
+        """Return the number of messages stored in a session."""
         return len(self.messages.get(id_session, []))
 
     def create_session(self, id_user, user_repository):
+        """Create an empty session for an existing user and return its identifier."""
         id_session = f"session-{len(self.sessions) + 1}"
         self.sessions[id_session] = Session(id=id_session, id_user=id_user, name="", messages=[])
         return id_session
 
     def save_message(self, id_session, message):
+        """Append a message to the session and update its modification timestamp."""
         self.messages.setdefault(id_session, []).append(message)
 
     def update_name(self, id_session, name):
+        """Update the session name and modification timestamp."""
         self.created_names[id_session] = name
         self.sessions[id_session].name = name
 
 
+class InMemoryImprovementPlanRepository:
+    def __init__(self, plans=None):
+        self.plans = list(plans or [])
+
+    def get_by_id_external_inventory(self, id_external_inventory):
+        """Retrieve the improvement plan associated with an external inventory identifier."""
+        plan = next(
+            (p for p in self.plans if p.id_external_inventory == id_external_inventory), None
+        )
+        if plan is None:
+            raise ValueError(f"Improvement plan with id_external_inventory {id_external_inventory} not found.")
+        return plan
+
+    def get_last_by_id_external_unit(self, id_external_unit, limit):
+        """Retrieve the latest plans for an external unit, up to the requested limit."""
+        of_the_unit = [p for p in self.plans if p.id_external_unit == id_external_unit]
+        return sorted(of_the_unit, key=lambda plan: plan.updated_at, reverse=True)[:limit]
+
+    def create(self, improvement_plan):
+        """Persist an improvement plan and return the stored entity."""
+        improvement_plan.id = f"plan-{len(self.plans) + 1}"
+        improvement_plan.updated_at = improvement_plan.updated_at or datetime.utcnow()
+        self.plans.append(improvement_plan)
+        return improvement_plan
+
+
+class InMemoryInventoryRepository:
+    """Stands in for the ms-inventory microservice the gateway calls."""
+
+    def __init__(self, markdown=INVENTORY_MARKDOWN):
+        self.markdown = markdown
+        self.resolved = []
+
+    def get_inventory_markdown(self, id_external_inventory):
+        """Retrieve the inventory content as Markdown from the inventory service."""
+        self.resolved.append(id_external_inventory)
+        return self.markdown
+
+
 @pytest.fixture
 def seeded_repositories():
+    """Create repositories populated with scenario fixtures."""
     user = User(id="u1", id_external_user=12345, role="analyst", usecase="report_generation")
     session = Session(id="s1", id_user="u1", name="Weekly emissions review", messages=[])
     message = Message(
         input="Summarize this session.",
         output="Here is the summary.",
         submitted_at=SUBMITTED_AT,
-        llm="fake-llm",
-        input_tokens=10,
-        output_tokens=20,
     )
     memories = [
         UserMemory(
@@ -133,23 +177,48 @@ def seeded_repositories():
 
 @pytest.fixture
 def live_app(api_main, seeded_repositories, monkeypatch):
-    """The real app, started through its real lifespan."""
+    """Build the conversation test application with isolated dependencies."""
     user_repository, session_repository = seeded_repositories
     app = api_main.app
     app.dependency_overrides[user_handlers.get_user_service] = lambda: UserService(user_repository)
     app.dependency_overrides[session_handlers.get_session_service] = lambda: SessionService(session_repository)
-    # The send-message handler builds its user repository inline, so it is not
-    # reachable through `dependency_overrides`.
+
     monkeypatch.setattr(session_handlers, "UserRepository", lambda db: user_repository)
     with TestClient(app) as client:
         yield client, api_main, user_repository, session_repository
     app.dependency_overrides.clear()
 
 
-# ---------------------------------------------------------------------------
-# Application wiring
-# ---------------------------------------------------------------------------
+@pytest.fixture
+def report_app(live_app, monkeypatch):
+    """Build the report test application with isolated dependencies."""
+    client, api_main, user_repository, _ = live_app
+    plan_repository = InMemoryImprovementPlanRepository()
+    inventory_repository = InMemoryInventoryRepository()
+
+    client.app.dependency_overrides[improvement_plan_handlers.get_improvement_plan_service] = (
+        lambda: ImprovementPlanService(plan_repository, inventory_repository)
+    )
+
+    monkeypatch.setattr(improvement_plan_handlers, "UserRepository", lambda db: user_repository)
+
+    return client, api_main, plan_repository, inventory_repository
+
+
+def request_report(client, id_external_inventory=ID_INVENTORY, id_external_unit=ID_UNIT, id_user="u1"):
+    """Submit a report request to the test application."""
+    return client.post(
+        "/aether-api/v1/ai/report",
+        params={
+            "id_external_inventory": id_external_inventory,
+            "id_external_unit": id_external_unit,
+            "id_user": id_user,
+        },
+    )
+
+
 def test_lifespan_configures_the_sdk_from_environment(live_app, fake_sdk):
+    """Verify that lifespan configures the sdk from environment."""
     assert fake_sdk.RUNTIME.config_calls == [
         {
             "api_key": "test-gemini-key",
@@ -163,32 +232,30 @@ def test_lifespan_configures_the_sdk_from_environment(live_app, fake_sdk):
 
 
 def test_lifespan_registers_the_tools_under_the_sdk_agent_names(live_app, fake_sdk):
+    """Verify that lifespan registers the tools under the sdk agent names."""
     assert set(fake_sdk.RUNTIME.tools) == TOOLED_AGENTS
 
 
 def test_registered_tool_keys_are_all_known_agents(live_app, fake_sdk):
+    """Verify that registered tool keys are all known agents."""
     assert TOOLED_AGENTS.issubset(set(fake_sdk.AGENT_NAMES))
 
 
+def test_the_reviewers_are_registered_no_tools(live_app, fake_sdk):
+    """Verify that the reviewers are registered no tools."""
+    assert not {"Guardrail de Saída", "Verificador de Resposta"} & set(fake_sdk.RUNTIME.tools)
+
+
 def test_lifespan_registers_every_agent_in_a_single_call(live_app, fake_sdk):
-    """`set_tools()` replaces the whole registry, so one call must carry them all."""
+    """Verify that lifespan registers every agent in a single call."""
     assert len(fake_sdk.RUNTIME.set_tools_calls) == 1
 
 
-# Every agent that gets the general web research tools of the Tavily MCP
-# integration also gets one integration nobody else does — "Analista de Gases
-# Verdes" the ChromaDB vector search, "Analista de Poluentes" the Climatiq
-# calculator, "Coordenador de Melhoria Contínua" the ROI and payback tools —
-# so each of them has a test of its own below, asserting its whole tool set.
-
-
-# The one tool nobody is singled out for: arithmetic is every agent's problem,
-# and a language model predicting digits is every agent's failure mode (see
-# `cmd/api/tools/calculator.py`).
 CALCULATOR_TOOL_NAME = "calculator"
 
 
 def test_faq_gets_the_site_map_and_user_memory_tools(live_app, fake_sdk):
+    """Verify that faq gets the site map and user memory tools."""
     tool_names = {tool.name for tool in fake_sdk.RUNTIME.tools["FAQ"]}
     assert tool_names == {
         "tavily_map",
@@ -203,7 +270,7 @@ ROI_TOOL_NAMES = {"calculate_roi", "calculate_payback"}
 
 
 def test_continuous_improvement_coordinator_also_gets_the_roi_tools(live_app, fake_sdk):
-    """Only this agent weighs an investment: it is the one that proposes them."""
+    """Verify that continuous improvement coordinator also gets the roi tools."""
     tool_names = {
         tool.name for tool in fake_sdk.RUNTIME.tools["Coordenador de Melhoria Contínua"]
     }
@@ -221,12 +288,13 @@ def test_continuous_improvement_coordinator_also_gets_the_roi_tools(live_app, fa
     sorted(TOOLED_AGENTS - {"Coordenador de Melhoria Contínua"}),
 )
 def test_no_other_agent_can_reach_the_roi_tools(live_app, fake_sdk, agent):
+    """Verify that no other agent can reach the roi tools."""
     tool_names = {tool.name for tool in fake_sdk.RUNTIME.tools[agent]}
     assert tool_names.isdisjoint(ROI_TOOL_NAMES)
 
 
 def test_green_gas_analyst_also_gets_the_chroma_vector_search(live_app, fake_sdk):
-    """Only this agent reads the `gases-info` collection (see the Feature/40 card)."""
+    """Verify that green gas analyst also gets the chroma vector search."""
     tool_names = {tool.name for tool in fake_sdk.RUNTIME.tools["Analista de Gases Verdes"]}
     assert tool_names == {
         "tavily_search",
@@ -243,6 +311,7 @@ def test_green_gas_analyst_also_gets_the_chroma_vector_search(live_app, fake_sdk
     sorted(TOOLED_AGENTS - {"Analista de Gases Verdes"}),
 )
 def test_no_other_agent_can_reach_the_gases_info_collection(live_app, fake_sdk, agent):
+    """Verify that no other agent can reach the gases info collection."""
     tool_names = {tool.name for tool in fake_sdk.RUNTIME.tools[agent]}
     assert "query_gases_info" not in tool_names
 
@@ -251,7 +320,7 @@ CLIMATIQ_TOOL_NAMES = {"climatiq_search", "climatiq_estimate"}
 
 
 def test_pollutant_analyst_also_gets_the_climatiq_calculator(live_app, fake_sdk):
-    """Only this agent calculates emissions through Climatiq (see the Feature/45 card)."""
+    """Verify that pollutant analyst also gets the climatiq calculator."""
     tool_names = {tool.name for tool in fake_sdk.RUNTIME.tools["Analista de Poluentes"]}
     assert tool_names == {
         "tavily_search",
@@ -267,33 +336,27 @@ def test_pollutant_analyst_also_gets_the_climatiq_calculator(live_app, fake_sdk)
     sorted(TOOLED_AGENTS - {"Analista de Poluentes"}),
 )
 def test_no_other_agent_can_reach_climatiq(live_app, fake_sdk, agent):
+    """Verify that no other agent can reach climatiq."""
     tool_names = {tool.name for tool in fake_sdk.RUNTIME.tools[agent]}
     assert tool_names.isdisjoint(CLIMATIQ_TOOL_NAMES)
 
 
 def test_inventory_analyst_gets_no_tavily_tools_but_gets_mongo_tools(live_app, fake_sdk):
+    """Verify that inventory analyst gets no tavily tools but gets mongo tools."""
     tool_names = {tool.name for tool in fake_sdk.RUNTIME.tools["Análista de inventários"]}
     assert tool_names == {"find_improvement_plan", "find_user_memory", CALCULATOR_TOOL_NAME}
 
 
-# ---------------------------------------------------------------------------
-# The calculator: the one tool every agent gets
-# ---------------------------------------------------------------------------
 @pytest.mark.parametrize("agent", sorted(TOOLED_AGENTS))
 def test_every_agent_gets_the_calculator(live_app, fake_sdk, agent):
-    """Unlike Chroma and Climatiq, this one is not anybody's speciality.
-
-    Every agent quotes numbers, and none of them can be trusted to do the
-    arithmetic in its own head — so the rule is the mirror image of the guard
-    tests above: not "only this agent", but "no agent without it".
-    """
+    """Verify that every agent gets the calculator."""
     tool_names = {tool.name for tool in fake_sdk.RUNTIME.tools[agent]}
 
     assert CALCULATOR_TOOL_NAME in tool_names
 
 
 def test_the_calculator_the_agents_get_actually_calculates(live_app, fake_sdk):
-    """The registry holds the real tool, not a name that resolves to nothing."""
+    """Verify that the calculator the agents get actually calculates."""
     tools = fake_sdk.RUNTIME.tools["Analista de Poluentes"]
     calculator = next(tool for tool in tools if tool.name == CALCULATOR_TOOL_NAME)
 
@@ -301,11 +364,7 @@ def test_the_calculator_the_agents_get_actually_calculates(live_app, fake_sdk):
 
 
 def test_the_same_calculator_is_registered_for_every_agent(live_app, fake_sdk):
-    """One built tool, five registries — as with Tavily and Climatiq next door.
-
-    A LangChain `Tool` here is a name, a description and a pure function, so
-    there is nothing per-agent to keep apart and nothing to be mutated.
-    """
+    """Verify that the same calculator is registered for every agent."""
     calculators = {
         id(tool.tool)
         for agent in TOOLED_AGENTS
@@ -317,6 +376,7 @@ def test_the_same_calculator_is_registered_for_every_agent(live_app, fake_sdk):
 
 
 def test_lifespan_publishes_sdk_factories_on_app_state(live_app, fake_sdk):
+    """Verify that lifespan publishes sdk factories on app state."""
     _, api_main, _, _ = live_app
     state = api_main.app.state._state
 
@@ -330,7 +390,7 @@ def test_lifespan_publishes_sdk_factories_on_app_state(live_app, fake_sdk):
 
 
 def test_lifespan_publishes_no_shared_sdk_instance(live_app):
-    """v2 builds a messenger per user and an analyzer per report: nothing is shared."""
+    """Verify that lifespan publishes no shared sdk instance."""
     _, api_main, _, _ = live_app
     state = api_main.app.state._state
 
@@ -339,6 +399,7 @@ def test_lifespan_publishes_no_shared_sdk_instance(live_app):
 
 
 def test_every_factory_call_builds_a_fresh_instance(live_app):
+    """Verify that every factory call builds a fresh instance."""
     _, api_main, _, _ = live_app
     factory = api_main.app.state._state["aeko_inventory_analyzer_factory"]
 
@@ -346,6 +407,7 @@ def test_every_factory_call_builds_a_fresh_instance(live_app):
 
 
 def test_lifespan_pings_the_database_and_closes_the_client(api_main):
+    """Verify that lifespan pings the database and closes the client."""
     with TestClient(api_main.app):
         pass
     client = api_main.MongoClient.instances[-1]
@@ -364,16 +426,18 @@ class FakeMCPSession:
         self.closed = False
 
     def start(self):
+        """Record the simulated MCP session startup."""
         self.started.set()
         if self.fails_with is not None:
             raise self.fails_with
 
     def close(self):
+        """Record closure of the simulated resource."""
         self.closed = True
 
 
 def printed_within(capsys, needle, timeout=5.0):
-    """Wait for a background thread's `print` to arrive."""
+    """Check whether captured output contains the expected text before the deadline."""
     deadline = time.monotonic() + timeout
     output = ""
     while time.monotonic() < deadline:
@@ -385,9 +449,7 @@ def printed_within(capsys, needle, timeout=5.0):
 
 
 def test_lifespan_warms_up_every_mcp_session_and_closes_it_afterwards(api_main, monkeypatch):
-    """Opening the sessions at start-up is what keeps the cold start off the
-    first user's question; closing them is what keeps the server processes
-    from outliving the API."""
+    """Verify that lifespan warms up every mcp session and closes it afterwards."""
     sessions = (FakeMCPSession("tavily"), FakeMCPSession("mongodb"), FakeMCPSession("chroma"))
     monkeypatch.setattr(api_main, "MCP_SESSIONS", sessions)
     monkeypatch.setattr(api_main, "MCP_WARM_UP", "true")
@@ -400,7 +462,7 @@ def test_lifespan_warms_up_every_mcp_session_and_closes_it_afterwards(api_main, 
 
 
 def test_lifespan_spawns_no_mcp_server_when_warm_up_is_switched_off(api_main, monkeypatch):
-    """What the test suite itself relies on — see `AEKO_MCP_WARM_UP` in conftest."""
+    """Verify that lifespan spawns no mcp server when warm up is switched off."""
     session = FakeMCPSession("chroma")
     monkeypatch.setattr(api_main, "MCP_SESSIONS", (session,))
     monkeypatch.setattr(api_main, "MCP_WARM_UP", "false")
@@ -413,7 +475,7 @@ def test_lifespan_spawns_no_mcp_server_when_warm_up_is_switched_off(api_main, mo
 
 
 def test_lifespan_starts_even_when_an_mcp_server_refuses_to(api_main, monkeypatch, capsys):
-    """A broken integration must not take the whole API down with it."""
+    """Verify that lifespan starts even when an mcp server refuses to."""
     session = FakeMCPSession("chroma", fails_with=RuntimeError("CHROMA_API_KEY is not set."))
     monkeypatch.setattr(api_main, "MCP_SESSIONS", (session,))
     monkeypatch.setattr(api_main, "MCP_WARM_UP", "true")
@@ -427,7 +489,7 @@ IMPORTS_THE_SDK = re.compile(r"^\s*(?:from|import)\s+aeko\b", re.MULTILINE)
 
 
 def test_only_the_entry_point_imports_the_sdk():
-    """Guards the refactor: `aeko` must be imported in one place only."""
+    """Verify that only the entry point imports the sdk."""
     ignored = {"tests", ".git", ".venv", "venv", "env", "site-packages", "__pycache__"}
     importers = sorted(
         str(path.relative_to(REPO_ROOT)).replace("\\", "/")
@@ -439,10 +501,8 @@ def test_only_the_entry_point_imports_the_sdk():
     assert importers == ["cmd/api/main.py"]
 
 
-# ---------------------------------------------------------------------------
-# User journey across the registered routes
-# ---------------------------------------------------------------------------
 def test_journey_user_then_sessions_then_messages(live_app):
+    """Verify that journey user then sessions then messages."""
     client, _, _, _ = live_app
 
     user = client.get("/aether-api/v1/ai/user/12345")
@@ -466,20 +526,20 @@ def test_journey_user_then_sessions_then_messages(live_app):
 
 
 def test_journey_unknown_user_is_404(live_app):
+    """Verify that journey unknown user is 404."""
     client, _, _, _ = live_app
 
     assert client.get("/aether-api/v1/ai/user/99999").status_code == 404
     assert client.get("/aether-api/v1/ai/sessions/user/ghost").status_code == 404
 
 
-# ---------------------------------------------------------------------------
-# The conversational flow, end to end against the v2 SDK
-# ---------------------------------------------------------------------------
 def send(client, **body):
+    """Send or capture the request messages used by the test."""
     return client.post("/aether-api/v1/ai/user/session/message", json=body)
 
 
 def test_send_message_completes_the_round_trip(live_app):
+    """Verify that send message completes the round trip."""
     client, _, _, session_repository = live_app
 
     response = send(client, id_session="s1", input="What is scope 3?", id_user="u1")
@@ -490,19 +550,21 @@ def test_send_message_completes_the_round_trip(live_app):
 
 
 def test_send_message_hands_the_session_document_to_the_sdk(live_app, fake_sdk):
+    """Verify that send message hands the session document to the sdk."""
     client, _, _, _ = live_app
 
     send(client, id_session="s1", input="What is scope 3?", id_user="u1")
 
-    message, session = fake_sdk.AekoMessenger.instances[-1].sent[-1]
+    message, session, _ = fake_sdk.AekoMessenger.instances[-1].sent[-1]
     assert message == "What is scope 3?"
     assert session.id == "s1"
     assert session.id_user == "u1"
-    # The turn already stored is replayed as the conversation itself.
+
     assert [turn.input for turn in session.messages][0] == "Summarize this session."
 
 
 def test_send_message_builds_the_messenger_for_the_asking_user(live_app, fake_sdk):
+    """Verify that send message builds the messenger for the asking user."""
     client, _, _, _ = live_app
 
     send(client, id_session="s1", input="hi", id_user="u1")
@@ -514,6 +576,7 @@ def test_send_message_builds_the_messenger_for_the_asking_user(live_app, fake_sd
 
 
 def test_send_message_hands_over_only_the_memories_that_are_still_valid(live_app, fake_sdk):
+    """Verify that send message hands over only the memories that are still valid."""
     client, _, _, _ = live_app
 
     send(client, id_session="s1", input="hi", id_user="u1")
@@ -523,6 +586,7 @@ def test_send_message_hands_over_only_the_memories_that_are_still_valid(live_app
 
 
 def test_send_message_builds_a_new_messenger_for_every_request(live_app, fake_sdk):
+    """Verify that send message builds a new messenger for every request."""
     client, _, _, _ = live_app
 
     send(client, id_session="s1", input="one", id_user="u1")
@@ -532,6 +596,7 @@ def test_send_message_builds_a_new_messenger_for_every_request(live_app, fake_sd
 
 
 def test_send_message_names_a_brand_new_session_after_its_first_message(live_app):
+    """Verify that send message names a brand new session after its first message."""
     client, _, _, session_repository = live_app
 
     response = send(client, id_session="", input="How do I cut boiler emissions?", id_user="u1")
@@ -540,7 +605,8 @@ def test_send_message_names_a_brand_new_session_after_its_first_message(live_app
     assert session_repository.created_names == {"session-2": "How do I cut boiler emissions?"}
 
 
-def test_send_message_returns_502_when_the_guardrail_rejected_every_draft(live_app, fake_sdk):
+def test_send_message_returns_502_when_no_reviewer_approved_a_draft(live_app, fake_sdk):
+    """Verify that send message returns 502 when no reviewer approved a draft."""
     client, _, _, session_repository = live_app
     fake_sdk.AekoMessenger.next_approved = False
 
@@ -550,12 +616,168 @@ def test_send_message_returns_502_when_the_guardrail_rejected_every_draft(live_a
     assert len(session_repository.get_session_messages("s1")) == 1
 
 
-def test_report_route_is_registered(live_app):
-    client, _, _, _ = live_app
+def test_a_report_answers_with_the_plan_it_persisted(report_app):
+    """Verify that a report answers with the plan it persisted."""
+    client, _, plan_repository, _ = report_app
 
-    response = client.post(
-        "/aether-api/v1/ai/report",
-        params={"s3": "reports/input/u1/input.pdf", "id_user": "u1"},
+    response = request_report(client)
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["id_external_inventory"] == ID_INVENTORY
+    assert body["id_external_unit"] == ID_UNIT
+    assert body["defined_problem"] and body["method"] and body["reasoning"]
+    assert [plan.id for plan in plan_repository.plans] == [body["id"]]
+
+
+def test_the_inventory_is_resolved_by_the_microservice(report_app):
+    """Verify that the inventory is resolved by the microservice."""
+    client, _, _, inventory_repository = report_app
+
+    request_report(client)
+
+    assert inventory_repository.resolved == [ID_INVENTORY]
+
+
+def test_the_analyzer_reads_the_markdown_the_microservice_returned(report_app, fake_sdk):
+    """Verify that the analyzer reads the markdown the microservice returned."""
+    client, *_ = report_app
+
+    request_report(client)
+
+    analyzer = fake_sdk.AekoInventoryAnalyzer.instances[-1]
+    inventory, id_external_inventory, id_request = analyzer.analyzed[0]
+    assert inventory == INVENTORY_MARKDOWN
+    assert id_external_inventory == ID_INVENTORY
+    assert id_request
+
+
+def test_the_last_two_plans_of_the_unit_become_the_analyzers_context(report_app, fake_sdk):
+    """Verify that the last two plans of the unit become the analyzers context."""
+    client, _, plan_repository, _ = report_app
+    plan_repository.plans.extend(
+        [
+            ImprovementPlan(id="p1", id_external_inventory=500, id_external_unit=ID_UNIT, defined_problem="oldest problem", method="oldest method", reasoning="oldest reasoning", updated_at=datetime(2026, 1, 1)),
+            ImprovementPlan(id="p2", id_external_inventory=501, id_external_unit=ID_UNIT, defined_problem="middle problem", method="middle method", reasoning="middle reasoning", updated_at=datetime(2026, 3, 1)),
+            ImprovementPlan(id="p3", id_external_inventory=499, id_external_unit=ID_UNIT + 1, defined_problem="another unit", method="another method", reasoning="another reasoning", updated_at=datetime(2026, 6, 1)),
+            ImprovementPlan(id="p4", id_external_inventory=498, id_external_unit=ID_UNIT, defined_problem="newest problem", method="newest method", reasoning="newest reasoning", updated_at=datetime(2026, 5, 1)),
+        ]
     )
 
-    assert response.status_code != 404
+    request_report(client)
+
+    context = fake_sdk.AekoInventoryAnalyzer.instances[-1].context
+    assert "newest problem" in context and "newest method" in context
+    assert "middle problem" in context and "middle reasoning" in context
+
+    assert "oldest problem" not in context
+    assert "another unit" not in context
+
+
+def test_a_report_records_what_the_analysis_cost(report_app):
+    """Verify that a report records what the analysis cost."""
+    client, api_main, _, _ = report_app
+
+    response = request_report(client)
+
+    (document,) = stored_metrics(api_main)
+    assert document["flow"] == "analytical"
+    assert document["id_request"] == response.headers["x-request-id"]
+
+
+def test_a_report_without_a_plan_answers_502_and_stores_nothing(report_app, fake_sdk):
+    """Verify that a report without a plan answers 502 and stores nothing."""
+    client, api_main, plan_repository, _ = report_app
+    fake_sdk.AekoInventoryAnalyzer.next_error = fake_sdk.MalformedAgentOutputError(
+        "the coordinator never wrote the plan's three headings"
+    )
+
+    response = request_report(client)
+
+    assert response.status_code == 502
+    assert plan_repository.plans == []
+
+    (document,) = stored_metrics(api_main)
+    assert document["flow"] == "analytical"
+
+
+def test_the_plan_is_remembered_for_the_user_who_asked(report_app, live_app):
+    """Verify that the plan is remembered for the user who asked."""
+    client, *_ = report_app
+    _, _, user_repository, _ = live_app
+
+    request_report(client)
+
+    memory = user_repository.memories[-1]
+    assert memory.id_user == "u1"
+    assert memory.field == "improvement_plan"
+
+
+def stored_metrics(api_main):
+    """Read metrics persisted by the test request."""
+    return list(api_main.db["aeko_metrics"].documents)
+
+
+def test_send_message_records_what_the_run_cost(live_app):
+    """Verify that send message records what the run cost."""
+    client, api_main, _, _ = live_app
+
+    send(client, id_session="s1", input="What is scope 3?", id_user="u1")
+
+    (document,) = stored_metrics(api_main)
+    assert document["flow"] == "conversational"
+    assert document["error_description"] is None
+    assert document["latency"] > 0
+    assert [agent["name"] for agent in document["used_agents"]] == ["FAQ"]
+
+
+def test_the_recorded_run_names_the_request_its_caller_was_answered_with(live_app):
+    """Verify that the recorded run names the request its caller was answered with."""
+    client, api_main, _, _ = live_app
+
+    response = send(client, id_session="s1", input="What is scope 3?", id_user="u1")
+
+    (document,) = stored_metrics(api_main)
+    assert document["id_request"] == response.headers["x-request-id"]
+
+
+def test_the_two_metric_bases_name_the_same_request(live_app):
+    """Verify that the two metric bases name the same request."""
+    client, api_main, _, _ = live_app
+
+    send(client, id_session="s1", input="What is scope 3?", id_user="u1")
+
+    (request_row,) = list(api_main.db["hub_metrics"].documents)
+    (run_row,) = stored_metrics(api_main)
+    assert str(request_row["_id"]) == run_row["id_request"]
+
+
+def test_a_turn_no_reviewer_approved_is_still_recorded(live_app, fake_sdk):
+    """Verify that a turn no reviewer approved is still recorded."""
+    client, api_main, _, _ = live_app
+    fake_sdk.AekoMessenger.next_approved = False
+
+    response = send(client, id_session="s1", input="hi", id_user="u1")
+
+    assert response.status_code == 502
+    (document,) = stored_metrics(api_main)
+    assert document["error_description"] == fake_sdk.REVIEW_FAILURE
+
+
+def test_a_request_that_never_reached_the_sdk_records_no_run(live_app):
+    """Verify that a request that never reached the sdk records no run."""
+    client, api_main, _, _ = live_app
+
+    client.get("/aether-api/v1/ai/sessions/user/u1")
+
+    assert stored_metrics(api_main) == []
+
+
+def test_the_stored_turn_no_longer_carries_what_it_cost(live_app):
+    """Verify that stored messages contain conversation fields without run metrics."""
+    client, _, _, session_repository = live_app
+
+    send(client, id_session="s1", input="What is scope 3?", id_user="u1")
+
+    turn = session_repository.get_session_messages("s1")[-1]
+    assert set(vars(turn)) == {"input", "output", "submitted_at"}

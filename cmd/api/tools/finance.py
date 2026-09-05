@@ -1,53 +1,8 @@
-"""Whether an improvement pays for itself, and when — for the improvement coordinator.
+"""Calculate discounted ROI and payback over a fixed 60-month horizon.
 
-This module never imports `aeko` — `cmd/api/main.py` is the single entry point
-for the SDK (see `test_only_the_entry_point_imports_the_sdk`), so the wrapping
-into an `AekoTool` happens there. What this module hands back is plain
-LangChain `Tool` objects, exactly like its neighbour `calculator.py`.
-
-Like the calculator there is nothing on the other end: no child process as in
-`cmd/api/mcp/`, no REST call as in `cmd/api/integrations/`. Unlike it, this one
-goes to a single agent. Every agent quotes numbers, but only the "Coordenador
-de Melhoria Contínua" proposes spending money, and these two tools answer the
-two questions that proposal is judged by: is the return worth the capex, and
-how long until the capex is back.
-
-The two tools rather than one
------------------------------
-`calculate_roi` and `calculate_payback` share every step but the last, and
-they are still two tools because they are two decisions. ROI ranks proposals
-against each other; payback answers whether the company can wait that long,
-and a project can be excellent on the first and unacceptable on the second.
-Splitting them lets the agent ask the question it actually has, and the shared
-work is `_parse_request` and `_present_values` below, called by both.
-
-The arithmetic
---------------
-Money in month 60 is not money today, so every flow is discounted by the
-monthly WACC before anything is compared to the capex::
-
-    VP(Ft)   = Ft / (1 + WACC_mensal) ** t          t = 1 for the first month
-    VP_Total = Σ VP(Ft), t = 1..60
-    VPL      = VP_Total - CAPEX
-    ROI      = (VPL / CAPEX) * 100
-    Payback  = first t where Σ VP(Fi), i = 1..t, is at least CAPEX
-    Viable   = CAPEX <= VP_Total
-
-The horizon is fixed at 60 months (`ROI_HORIZON_MONTHS`) and the agent does not
-choose it: two proposals compared over different horizons are not comparable,
-and the whole point of the ROI is to put them side by side. A project that has
-not paid the capex back inside those months answers -1 rather than a month
-number, because "later than 60" is what is actually known.
-
-Why the request is validated before it is calculated
-----------------------------------------------------
-The input is written by a language model, and every field here changes the
-answer silently when it is wrong: an annual WACC sent as a monthly one turns a
-viable project into a rejected one, and a capex of zero is a division by zero
-one step later. So each field is checked and refused by name — the same
-contract as `_parse_estimate_request` in
-`cmd/api/integrations/climatiq_api.py`, because the caller reading the refusal
-is an agent writing the next attempt from it.
+Monthly cash flows are discounted by monthly WACC. ROI is net present value
+divided by CAPEX as a percentage. Payback is the first month covering CAPEX,
+or -1 when the investment is not recovered within the horizon.
 """
 
 import json
@@ -56,75 +11,24 @@ from typing import Any
 
 from langchain_core.tools import Tool
 
-# The window every proposal is judged over, in months. Fixed rather than a
-# parameter: an ROI is a comparison, and it stops being one when two answers
-# were calculated over different horizons.
-ROI_HORIZON_MONTHS = 60
+from internal.shared import Module, logged
 
-# What the payback answers when the capex is not recovered inside the horizon.
-# A month number would be a guess; this says exactly what is known.
-ROI_PAYBACK_NOT_RECOVERED = -1
 
-# Money and percentages as they are quoted, applied once at the end — the
-# calculation itself runs at full precision. Two places because that is how a
-# currency amount is written.
-ROI_DECIMAL_PLACES = 2
-
-# A monthly rate at or above 1 is 100% a month, which nobody's WACC is: what it
-# actually is, every time, is the annual figure sent to a monthly field.
-ROI_MAX_WACC_MONTHLY = 1
-
-# The two ways of giving the flows, and exactly one of them travels in a
-# request: a list for a project whose months differ, a single number for the
-# usual case of a constant monthly saving.
-ROI_CASH_FLOW_FIELDS = ("cash_flows", "monthly_cash_flow")
-
-ROI_REQUEST_FIELDS = ("capex", "wacc_monthly", *ROI_CASH_FLOW_FIELDS)
-
-# Written once because both tools take exactly the same request, and an agent
-# that learns the shape from one tool must find it unchanged in the other.
-ROI_REQUEST_DESCRIPTION = (
-    'Input is a JSON object string with "capex" (the initial investment, above '
-    'zero), "wacc_monthly" (the monthly discount rate as a decimal, so 0.01 is '
-    "1% a month — convert an annual rate before sending it) and exactly one of "
-    '"monthly_cash_flow" (one net monthly cash flow, repeated over the '
-    f'{ROI_HORIZON_MONTHS} months) or "cash_flows" (the monthly flows in order, '
-    f"up to {ROI_HORIZON_MONTHS} of them, months left out counting as zero; a "
-    "month that costs money is negative) — for example "
-    '\'{"capex": 150000, "wacc_monthly": 0.01, "monthly_cash_flow": 5000}\'. '
-    f"Each flow is discounted to its present value over a fixed {ROI_HORIZON_MONTHS}"
-    "-month horizon."
-)
-
-ROI_DESCRIPTION = (
-    "Calculates the return on investment (ROI) of an improvement project. "
-    + ROI_REQUEST_DESCRIPTION
-    + ' Answers "vp_total" (the present value of all the flows), "vpl" (that '
-    'minus the capex), "roi_percent" and "viable" (true when the capex is at '
-    "most the present value). Use it to decide whether a proposal is worth "
-    "making and to rank proposals against each other."
-)
-
-PAYBACK_DESCRIPTION = (
-    "Calculates the payback of an improvement project: the first month in "
-    "which the discounted cash flows accumulated so far have paid the capex "
-    "back. " + ROI_REQUEST_DESCRIPTION + ' Answers "payback_months", which is '
-    f"{ROI_PAYBACK_NOT_RECOVERED} when the capex is not recovered within the "
-    f"{ROI_HORIZON_MONTHS} months, together with \"vp_total\" and \"viable\". "
-    "Use it to say how long the company waits, which is a different question "
-    "from whether the project pays — calculate_roi answers that one."
+from cmd.api.tools.constants import (
+    ROI_HORIZON_MONTHS,
+    ROI_PAYBACK_NOT_RECOVERED,
+    ROI_DECIMAL_PLACES,
+    ROI_MAX_WACC_MONTHLY,
+    ROI_CASH_FLOW_FIELDS,
+    ROI_REQUEST_FIELDS,
+    ROI_REQUEST_DESCRIPTION,
+    ROI_DESCRIPTION,
+    PAYBACK_DESCRIPTION,
 )
 
 
 def _as_object(request_input: str | dict[str, Any] | None) -> dict[str, Any]:
-    """Turn the agent's input into the request object.
-
-    Agents are asked for a JSON object string and also send the object itself;
-    both are accepted, mirroring `_as_object` in
-    `cmd/api/integrations/climatiq_api.py`. Anything else is refused carrying
-    the text the agent actually sent, so it can correct itself instead of
-    seeing a bare `JSONDecodeError`.
-    """
+    """Accept a dictionary or decode a JSON object string, rejecting other input."""
 
     if isinstance(request_input, dict):
         return request_input
@@ -150,13 +54,7 @@ def _as_object(request_input: str | dict[str, Any] | None) -> dict[str, Any]:
 
 
 def _number(value: object, field: str) -> int | float:
-    """One field that must be a real number, named so the agent can fix it.
-
-    `bool` is excluded although it is an `int` in Python, and `inf`/`nan` are
-    excluded although they are `float`s: JSON spells both (`Infinity`, `NaN`)
-    and either would travel through the whole calculation without raising,
-    coming back out as a confident answer.
-    """
+    """Validate a real numeric input, rejecting booleans and unsupported values."""
 
     if isinstance(value, bool) or not isinstance(value, (int, float)):
         raise ValueError(f'"{field}" must be a number, got {value!r}.')
@@ -168,13 +66,11 @@ def _number(value: object, field: str) -> int | float:
 
 
 def _parse_capex(request: dict[str, Any]) -> int | float:
-    """The initial investment, which the ROI is a proportion of."""
+    """Validate that the initial investment is a positive real amount."""
 
     capex = _number(request.get("capex"), "capex")
 
     if capex <= 0:
-        # `ROI = VPL / CAPEX` divides by this, and an investment of nothing has
-        # no return to express as a percentage of it.
         raise ValueError(
             f'"capex" must be the initial investment, above zero, got {capex!r}.'
         )
@@ -183,7 +79,7 @@ def _parse_capex(request: dict[str, Any]) -> int | float:
 
 
 def _parse_wacc(request: dict[str, Any]) -> int | float:
-    """The monthly discount rate, and the yearly figure it is so often given as."""
+    """Validate that monthly WACC is at least zero and less than one."""
 
     wacc = _number(request.get("wacc_monthly"), "wacc_monthly")
 
@@ -198,17 +94,11 @@ def _parse_wacc(request: dict[str, Any]) -> int | float:
 
 
 def _parse_cash_flows(request: dict[str, Any]) -> list[int | float]:
-    """The flows of the horizon, however the agent chose to write them.
-
-    Both spellings leave here as the same thing: one flow per month of the
-    horizon, so nothing downstream has to know which one was sent.
-    """
+    """Normalize monthly cash flows to the fixed investment horizon."""
 
     given = [field for field in ROI_CASH_FLOW_FIELDS if field in request]
 
     if len(given) != 1:
-        # Two spellings of the same months have no rule saying which wins, and
-        # none at all is a request with nothing to discount.
         raise ValueError(
             f'The request must carry exactly one of "cash_flows" (the monthly '
             f'flows, up to {ROI_HORIZON_MONTHS}) or "monthly_cash_flow" (one '
@@ -236,20 +126,16 @@ def _parse_cash_flows(request: dict[str, Any]) -> list[int | float]:
 
     flows = [_number(flow, f"cash_flows[{month}]") for month, flow in enumerate(flows)]
 
-    # A month the agent did not write is a month without a flow, not a month
-    # outside the horizon: the discounting still walks over it.
     return flows + [0] * (ROI_HORIZON_MONTHS - len(flows))
 
 
 def _parse_request(request_input: str | dict[str, Any] | None) -> dict[str, Any]:
-    """Everything both tools need, validated before anything is calculated."""
+    """Validate investment fields and return CAPEX, monthly WACC, and cash flows."""
 
     request = _as_object(request_input)
 
     unknown = sorted(set(request) - set(ROI_REQUEST_FIELDS))
     if unknown != []:
-        # Named rather than ignored: a field silently dropped is an agent that
-        # believes its rate, its horizon or its tax was taken into account.
         raise ValueError(
             f"The request takes no {', '.join(unknown)}. It accepts: "
             f"{', '.join(ROI_REQUEST_FIELDS)}."
@@ -265,12 +151,7 @@ def _parse_request(request_input: str | dict[str, Any] | None) -> dict[str, Any]
 def _present_values(
     cash_flows: list[int | float], wacc_monthly: int | float
 ) -> list[int | float]:
-    """`VP(Ft) = Ft / (1 + WACC_mensal) ** t`, one value per month.
-
-    `t` starts at 1: the first flow arrives a month out and is already worth
-    less than its face value. Starting at 0 would count that month as today
-    and overstate every project by one month of discounting.
-    """
+    """Discount each monthly cash flow to its present value."""
 
     return [
         flow / (1 + wacc_monthly) ** month
@@ -279,18 +160,13 @@ def _present_values(
 
 
 def _round(value: int | float) -> float:
-    """A number as it is quoted, once the calculation behind it is finished."""
+    """Round a final financial result to the configured decimal precision."""
 
     return round(value, ROI_DECIMAL_PLACES)
 
 
 def _payback_month(present_values: list[int | float], capex: int | float) -> int:
-    """The first month whose accumulated present value covers the capex.
-
-    Walked month by month rather than solved, because the accumulated value is
-    not always growing: a month that costs money takes it back down, and a
-    project can cross the capex and fall below it again before the horizon ends.
-    """
+    """Return the first month covering CAPEX, or -1 if it is not recovered."""
 
     accumulated = 0.0
 
@@ -303,8 +179,9 @@ def _payback_month(present_values: list[int | float], capex: int | float) -> int
     return ROI_PAYBACK_NOT_RECOVERED
 
 
+@logged(Module.TOOL, "calculate_roi")
 def _calculate_roi(request_input: str | dict[str, Any] | None = "") -> dict[str, Any]:
-    """`func` of `calculate_roi`: what the project returns on what it costs."""
+    """Calculate discounted value, net present value, ROI percentage, and viability."""
 
     request = _parse_request(request_input)
     capex = request["capex"]
@@ -319,16 +196,16 @@ def _calculate_roi(request_input: str | dict[str, Any] | None = "") -> dict[str,
         "vp_total": _round(vp_total),
         "vpl": _round(npv),
         "roi_percent": _round(npv / capex * 100),
-        # Compared before rounding: a project that covers its capex to the cent
-        # is viable, and `CAPEX <= VP_Total` puts the boundary on that side.
+
         "viable": capex <= vp_total,
     }
 
 
+@logged(Module.TOOL, "calculate_payback")
 def _calculate_payback(
     request_input: str | dict[str, Any] | None = "",
 ) -> dict[str, Any]:
-    """`func` of `calculate_payback`: the month the capex is back."""
+    """Calculate discounted payback month, present value, and viability."""
 
     request = _parse_request(request_input)
     capex = request["capex"]
@@ -342,21 +219,13 @@ def _calculate_payback(
         "months": ROI_HORIZON_MONTHS,
         "vp_total": _round(vp_total),
         "payback_months": _payback_month(present_values, capex),
-        # Kept beside the payback because the two can disagree, in one
-        # direction: flows that dip below the capex after covering it answer a
-        # payback month and still end the horizon short of viable. The reverse
-        # cannot happen — the accumulated value of the last month is `vp_total`,
-        # so a payback of -1 always means the capex was never covered.
+
         "viable": capex <= vp_total,
     }
 
 
 def get_roi_payback_tools() -> list[Tool]:
-    """The two tools of the "Coordenador de Melhoria Contínua", in the order asked.
-
-    Whether the project pays comes first; how long it takes to pay is the
-    question that follows it.
-    """
+    """Return discounted ROI and payback tools for investment analysis."""
 
     return [
         Tool(

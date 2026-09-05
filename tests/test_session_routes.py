@@ -1,10 +1,4 @@
-"""Unit tests for the Sessions router.
-
-The service layer is replaced through `app.dependency_overrides`, so these
-tests cover the HTTP contract only: status codes, response shape, error
-mapping, and the dependency injection of the SDK factories held on
-`app.state`.
-"""
+"""Verify session routes behavior and error handling."""
 
 import asyncio
 from datetime import datetime
@@ -37,13 +31,16 @@ class StubSessionService:
         return self.result
 
     def get_user_sessions(self, id_user):
+        """Retrieve the sessions belonging to a user."""
         return self._run(id_user=id_user)
 
     def get_session_messages(self, id_session):
+        """Retrieve the stored messages for a session."""
         return self._run(id_session=id_session)
 
     def send_message(self, id_session, input, id_user, aeko_messenger_factory,
                      aeko_session_factory, user_repository):
+        """Record the conversation call and return or raise its scripted result."""
         return self._run(
             id_session=id_session,
             input=input,
@@ -65,7 +62,7 @@ class StubUserRepository:
 
 
 def build_client(service=None, db="fake-db", factories=True):
-    """The lifespan publishes the two SDK factories; `factories=False` omits them."""
+    """Build a test client or client double with the supplied dependencies."""
     app = FastAPI()
     app.include_router(session_handlers.router)
     app.state.db = db
@@ -78,28 +75,22 @@ def build_client(service=None, db="fake-db", factories=True):
 
 
 def MESSENGER_FACTORY(user, memories):
+    """Provide the messenger factory used by the route test."""
     raise AssertionError("the stub service never runs the SDK")
 
 
 def SESSION_FACTORY(session):
+    """Provide the session factory used by the route test."""
     raise AssertionError("the stub service never runs the SDK")
 
 
 def make_message(input="Summarize this session.", output="Here is the summary."):
-    return Message(
-        input=input,
-        output=output,
-        submitted_at=SUBMITTED_AT,
-        llm="fake-llm",
-        input_tokens=10,
-        output_tokens=20,
-    )
+    """Build a message fixture for session responses."""
+    return Message(input=input, output=output, submitted_at=SUBMITTED_AT)
 
 
-# ---------------------------------------------------------------------------
-# GET /aether-api/v1/ai/sessions/user/{id_user}
-# ---------------------------------------------------------------------------
 def test_get_user_sessions_returns_sessions():
+    """Verify that get user sessions returns sessions."""
     service = StubSessionService(
         result=[
             Session(id="65a8b3d6c0f8e1d7f4b2c001", id_user="u1", name="Weekly emissions review", messages=[]),
@@ -117,6 +108,7 @@ def test_get_user_sessions_returns_sessions():
 
 
 def test_get_user_sessions_returns_empty_list():
+    """Verify that get user sessions returns empty list."""
     response = build_client(StubSessionService(result=[])).get(SESSIONS_ROUTE.format(id_user="u1"))
 
     assert response.status_code == 200
@@ -124,6 +116,7 @@ def test_get_user_sessions_returns_empty_list():
 
 
 def test_get_user_sessions_maps_value_error_to_404():
+    """Verify that get user sessions maps value error to 404."""
     service = StubSessionService(error=ValueError("No sessions found."))
     response = build_client(service).get(SESSIONS_ROUTE.format(id_user="ghost"))
 
@@ -132,6 +125,7 @@ def test_get_user_sessions_maps_value_error_to_404():
 
 
 def test_get_user_sessions_maps_unexpected_error_to_500():
+    """Verify that get user sessions maps unexpected error to 500."""
     service = StubSessionService(error=RuntimeError("boom"))
     response = build_client(service).get(SESSIONS_ROUTE.format(id_user="u1"))
 
@@ -140,16 +134,15 @@ def test_get_user_sessions_maps_unexpected_error_to_500():
 
 
 def test_get_user_sessions_returns_503_when_database_is_not_initialized():
+    """Verify that get user sessions returns 503 when database is not initialized."""
     response = build_client(service=None, db=None).get(SESSIONS_ROUTE.format(id_user="u1"))
 
     assert response.status_code == 503
     assert response.json()["detail"] == "Database is not initialized"
 
 
-# ---------------------------------------------------------------------------
-# GET /aether-api/v1/ai/session/{id_session}/messages
-# ---------------------------------------------------------------------------
 def test_get_session_messages_returns_messages():
+    """Verify that get session messages returns messages."""
     service = StubSessionService(result=[make_message()])
     response = build_client(service).get(MESSAGES_ROUTE.format(id_session="s1"))
 
@@ -165,6 +158,7 @@ def test_get_session_messages_returns_messages():
 
 
 def test_get_session_messages_maps_value_error_to_400():
+    """Verify that get session messages maps value error to 400."""
     service = StubSessionService(error=ValueError("Invalid session."))
     response = build_client(service).get(MESSAGES_ROUTE.format(id_session="bad"))
 
@@ -173,6 +167,7 @@ def test_get_session_messages_maps_value_error_to_400():
 
 
 def test_get_session_messages_maps_unexpected_error_to_500():
+    """Verify that get session messages maps unexpected error to 500."""
     service = StubSessionService(error=RuntimeError("boom"))
     response = build_client(service).get(MESSAGES_ROUTE.format(id_session="s1"))
 
@@ -180,17 +175,15 @@ def test_get_session_messages_maps_unexpected_error_to_500():
     assert "boom" in response.json()["detail"]
 
 
-# ---------------------------------------------------------------------------
-# POST /aether-api/v1/ai/user/session/message
-# ---------------------------------------------------------------------------
 @pytest.fixture
 def patched_user_repository(monkeypatch):
-    """The handler builds `UserRepository(db)` inline; swap it for a stub."""
+    """Replace the route user repository with a test double."""
     monkeypatch.setattr(session_handlers, "UserRepository", StubUserRepository)
     return StubUserRepository
 
 
 def test_send_message_returns_the_exchange(patched_user_repository):
+    """Verify that send message returns the exchange."""
     service = StubSessionService(result=make_message())
 
     response = build_client(service).post(
@@ -207,6 +200,7 @@ def test_send_message_returns_the_exchange(patched_user_repository):
 
 
 def test_send_message_injects_both_sdk_factories_from_app_state(patched_user_repository):
+    """Verify that send message injects both sdk factories from app state."""
     service = StubSessionService(result=make_message())
 
     build_client(service).post(SEND_ROUTE, json={"id_session": "", "input": "hi", "id_user": "u1"})
@@ -220,6 +214,7 @@ def test_send_message_injects_both_sdk_factories_from_app_state(patched_user_rep
 
 
 def test_send_message_defaults_missing_body_fields(patched_user_repository):
+    """Verify that send message defaults missing body fields."""
     service = StubSessionService(result=make_message())
 
     build_client(service).post(SEND_ROUTE, json={})
@@ -230,6 +225,7 @@ def test_send_message_defaults_missing_body_fields(patched_user_repository):
 
 
 def test_send_message_returns_500_when_the_sdk_is_not_initialized():
+    """Verify that send message returns 500 when the sdk is not initialized."""
     service = StubSessionService(result=make_message())
 
     response = build_client(service, factories=False).post(
@@ -241,6 +237,7 @@ def test_send_message_returns_500_when_the_sdk_is_not_initialized():
 
 
 def test_send_message_maps_value_error_to_400(patched_user_repository):
+    """Verify that send message maps value error to 400."""
     service = StubSessionService(error=ValueError("Session limit reached."))
 
     response = build_client(service).post(
@@ -252,7 +249,7 @@ def test_send_message_maps_value_error_to_400(patched_user_repository):
 
 
 def test_send_message_maps_a_rejected_answer_to_502(patched_user_repository):
-    """An empty answer is a successful run with nothing to persist, not a crash."""
+    """Verify that send message maps a rejected answer to 502."""
     service = StubSessionService(
         error=GuardrailRejectedError("The output guardrail rejected every draft.")
     )
@@ -266,6 +263,7 @@ def test_send_message_maps_a_rejected_answer_to_502(patched_user_repository):
 
 
 def test_send_message_maps_unexpected_error_to_500(patched_user_repository):
+    """Verify that send message maps unexpected error to 500."""
     service = StubSessionService(error=RuntimeError("boom"))
 
     response = build_client(service).post(
@@ -277,7 +275,7 @@ def test_send_message_maps_unexpected_error_to_500(patched_user_repository):
 
 
 def test_send_message_runs_the_blocking_sdk_call_off_the_event_loop(patched_user_repository):
-    """A run is several model calls long: it may never block the event loop."""
+    """Verify that send message runs the blocking sdk call off the event loop."""
 
     class LoopAwareService(StubSessionService):
         def __init__(self):
@@ -285,6 +283,7 @@ def test_send_message_runs_the_blocking_sdk_call_off_the_event_loop(patched_user
             self.ran_on_the_event_loop = None
 
         def send_message(self, *args, **kwargs):
+            """Record the conversation call and return or raise its scripted result."""
             try:
                 asyncio.get_running_loop()
                 self.ran_on_the_event_loop = True

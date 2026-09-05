@@ -1,16 +1,7 @@
-"""Shared test setup.
+"""Configure isolated API tests with an in-memory SDK and MongoDB doubles.
 
-Two things must happen before any application module is imported:
-
-1. `aeko` is registered in `sys.modules` pointing at `tests.fake_aeko`.
-   The API imports the real SDK only at its entry point (`cmd/api/main.py`),
-   so registering the fake here is enough for the whole suite.
-2. The environment variables `cmd/api/main.py` reads at import time are set.
-   `load_dotenv()` does not override variables that already exist, so these
-   values win over any local `.env`.
-
-pytest imports `conftest.py` before the test modules, so the module-level
-statements below always run first.
+The SDK replacement and test environment are installed before application
+imports. MCP warm-up is disabled to prevent external server startup.
 """
 
 import importlib
@@ -19,11 +10,15 @@ import sys
 from pathlib import Path
 
 import pytest
+from dotenv import load_dotenv
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
+load_dotenv(REPO_ROOT / "tests/settings.env", override=True)
+
+from internal.shared import event_tracking
 from tests import fake_aeko
 
 sys.modules.setdefault("aeko", fake_aeko)
@@ -36,35 +31,33 @@ os.environ["AEKO_SLOW_MODEL"] = "slow-model"
 os.environ["AEKO_MAX_TOKENS"] = "512"
 os.environ["AEKO_REPORT_MAX_TOKENS"] = "4096"
 
-# The application opens every MCP session when it starts, which spawns the
-# servers themselves (`npx`, and a Python process that loads a 768-dimension
-# model). No test may do that: the suite fakes the MCP clients instead.
+
 os.environ["AEKO_MCP_WARM_UP"] = "false"
 
-# The 1.x variables are gone; clearing them keeps a developer's local `.env`
-# from making a stale name look supported.
+
 os.environ.pop("AEKO_MODEL_LIST", None)
 os.environ.pop("AEKO_API_KEY_LIST", None)
 
 
-# --------------------------------------------------------------------------
-# Fake Mongo, used only to let the real app lifespan start without a server.
-# --------------------------------------------------------------------------
 class FakeCollection:
     def __init__(self, documents=None):
         self.documents = list(documents or [])
 
     def find(self, query=None, projection=None):
+        """Return scripted documents for the recorded collection query."""
         return list(self.documents)
 
     def find_one(self, query=None, projection=None):
+        """Return the scripted document for a collection lookup."""
         return self.documents[0] if self.documents else None
 
     def insert_one(self, document):
+        """Record a document insertion and return a simulated insert result."""
         self.documents.append(document)
         return type("InsertOneResult", (), {"inserted_id": "fake-inserted-id"})()
 
     def update_one(self, query, update):
+        """Record a document update and return a simulated update result."""
         return None
 
 
@@ -82,6 +75,7 @@ class FakeDatabase:
         return self[name]
 
     def command(self, name):
+        """Record a database command and return a simulated success response."""
         self.commands.append(name)
         return {"ok": 1}
 
@@ -101,12 +95,21 @@ class FakeMongoClient:
         return self.database
 
     def close(self):
+        """Record closure of the simulated resource."""
         self.closed = True
 
 
 @pytest.fixture(autouse=True)
+def no_event_sink():
+    """Clear metric sinks around each test."""
+    event_tracking.set_event_sink(None)
+    yield
+    event_tracking.set_event_sink(None)
+
+
+@pytest.fixture(autouse=True)
 def reset_aeko_runtime():
-    """`Aeko.config()` and `set_tools()` are process-wide; no test may inherit them."""
+    """Reset SDK runtime state around each test."""
     fake_aeko.Aeko.reset()
     yield
     fake_aeko.Aeko.reset()
@@ -114,29 +117,20 @@ def reset_aeko_runtime():
 
 @pytest.fixture
 def fake_sdk():
-    """The module registered as `aeko` for the whole suite."""
+    """Provide the reset SDK double to the test."""
     return fake_aeko
 
 
 @pytest.fixture
 def configured_sdk(reset_aeko_runtime):
-    """The SDK as a started application leaves it: an API key supplied.
-
-    Tests that mount a router without running the real lifespan need this;
-    without it the SDK refuses every run, which is what `AekoNotConfiguredError`
-    is for.
-    """
+    """Configure the SDK double for the test."""
     fake_aeko.Aeko.config("test-gemini-key")
     return fake_aeko
 
 
 @pytest.fixture
 def api_main(monkeypatch):
-    """The real `cmd.api.main` module with Mongo replaced by a fake client.
-
-    Imported lazily so the environment above is already in place, and reloaded
-    per test so module-level state never leaks between tests.
-    """
+    """Import the API entry point with isolated database and SDK dependencies."""
     FakeMongoClient.instances = []
     module = importlib.import_module("cmd.api.main")
     module = importlib.reload(module)

@@ -1,19 +1,7 @@
-"""In-memory stand-in for the real `aeko` package, version 2.
+"""Provide a scripted Aeko SDK double for configuration, chat, and analysis tests.
 
-The SDK is an external dependency that is not installed in the test
-environment. `conftest.py` registers this module under the name `aeko`
-in `sys.modules` before any application module is imported, so production
-code keeps its plain `from aeko import ...` at the entry point.
-
-Everything here mirrors the 2.0 README field for field: the DTOs are the same
-Pydantic models over the same MongoDB collections, `Aeko.config()` and
-`AekoMessenger.set_tools()` write to one process-wide runtime, and
-`send_message()` updates the `AekoSession` it is handed in place. What is faked
-is only the agent graph — a run's answer is scripted by the test instead of
-being produced by Gemini.
-
-Every fake records the calls it receives so tests can assert that the API
-wires the SDK correctly (configuration at startup, DTOs per request).
+Calls retain request identifiers and record agent metrics. Failed reviews
+raise with metrics attached and do not append a conversation message.
 """
 
 from dataclasses import dataclass
@@ -22,15 +10,16 @@ from typing import Any, Sequence
 
 from pydantic import BaseModel, ConfigDict, Field
 
-__version__ = "2.0.0"
+__version__ = "3.2.0"
 
-# The routing keys of the agent graph, exactly as the README spells them,
-# accents included.
+
 AGENT_NAMES: tuple[str, ...] = (
     "Roteador",
     "FAQ",
     "Orquestrador",
     "Guardrail de Saída",
+
+    "Verificador de Resposta",
     "Análista de inventários",
     "Analista de Poluentes",
     "Analista de Gases Verdes",
@@ -43,15 +32,44 @@ DEFAULT_MAX_TOKENS = 1024
 DEFAULT_REPORT_MAX_TOKENS = 8192
 
 
+DEFAULT_LATENCY = 12
+
+
 def _now() -> datetime:
     return datetime.now(timezone.utc)
 
 
-# ---------------------------------------------------------------------------
-# Exceptions
-# ---------------------------------------------------------------------------
+CONVERSATIONAL_FLOW = "conversational"
+ANALYTICAL_FLOW = "analytical"
+
+
+REVIEW_FAILURE = "no answer approved by the output guardrail or the response checker"
+
+
+class AekoAgentMetrics(BaseModel):
+    """What one agent *invocation* consumed — one entry per call, not per agent."""
+
+    name: str
+    input_tokens: int = Field(default=0, ge=0)
+    output_tokens: int = Field(default=0, ge=0)
+    llm: str = ""
+    used_tools: list[str] = Field(default_factory=list)
+
+
+class AekoMetrics(BaseModel):
+    """Metrics for one scripted SDK run, retaining the caller's request identifier."""
+
+    id_request: str
+    latency: int = Field(default=0, ge=0)
+    error_description: str | None = None
+    flow: str
+    used_agents: list[AekoAgentMetrics] = Field(default_factory=list)
+
+
 class AekoError(Exception):
-    """Base class for every error raised by the Aeko SDK."""
+    """Base SDK error carrying optional run metrics."""
+
+    aeko_metrics: AekoMetrics | None = None
 
 
 class AekoNotConfiguredError(AekoError):
@@ -73,9 +91,6 @@ class UnknownAgentError(AekoError):
         )
 
 
-# ---------------------------------------------------------------------------
-# Data objects — one per MongoDB collection
-# ---------------------------------------------------------------------------
 @dataclass(frozen=True)
 class AekoTool:
     tool: Any
@@ -83,14 +98,17 @@ class AekoTool:
 
     @property
     def name(self) -> str:
+        """Return the wrapped tool name."""
         return getattr(self.tool, "name", type(self.tool).__name__)
 
     def to_prompt_line(self) -> str:
+        """Format the wrapped tool name and description for an agent prompt."""
         description = self.description or getattr(self.tool, "description", "")
         return f"{self.name} - {description}".rstrip(" -")
 
     @classmethod
     def wrap(cls, tool: "AekoTool | Any") -> "AekoTool":
+        """Wrap a tool in the SDK tool representation."""
         return tool if isinstance(tool, cls) else cls(tool=tool)
 
 
@@ -114,16 +132,16 @@ class AekoUserMemory(BaseModel):
     expires_at: datetime | None = None
 
     def to_prompt_line(self) -> str:
+        """Format the wrapped tool name and description for an agent prompt."""
         return f"{self.field}: {self.description}"
 
 
 class AekoMessage(BaseModel):
+    """One exchanged conversation turn with its submission timestamp."""
+
     input: str
     output: str = ""
     submitted_at: datetime = Field(default_factory=_now)
-    llm: str = ""
-    input_tokens: int = Field(default=0, ge=0)
-    output_tokens: int = Field(default=0, ge=0)
 
 
 class AekoSession(BaseModel):
@@ -139,6 +157,7 @@ class AekoSession(BaseModel):
 
 class AekoMessageResponse(BaseModel):
     message: AekoMessage
+    aeko_metrics: AekoMetrics
     id_session: str | None = None
     id_user: str | None = None
     agents_called: list[str] = Field(default_factory=list)
@@ -157,14 +176,19 @@ class AekoImprovementPlan(BaseModel):
     updated_at: datetime = Field(default_factory=_now)
 
 
-# ---------------------------------------------------------------------------
-# The process-wide runtime `Aeko.config()` and `set_tools()` write to
-# ---------------------------------------------------------------------------
+class AekoAnalysisResponse(BaseModel):
+    """What `analyze()` hands back: the document to write, and what it cost."""
+
+    plan: AekoImprovementPlan
+    aeko_metrics: AekoMetrics
+
+
 class _Runtime:
     def __init__(self):
         self.reset()
 
     def reset(self):
+        """Restore the simulated SDK runtime defaults."""
         self.api_key = None
         self.fast_model = DEFAULT_FAST_MODEL
         self.slow_model = DEFAULT_SLOW_MODEL
@@ -175,6 +199,7 @@ class _Runtime:
         self.set_tools_calls = []
 
     def require_api_key(self):
+        """Raise when the simulated SDK has not been configured."""
         if not self.api_key:
             raise AekoNotConfiguredError(
                 "Aeko is not configured. Call Aeko.config() with a Gemini API key."
@@ -191,6 +216,7 @@ class Aeko:
     @staticmethod
     def config(api_key: str, *, fast_model: str | None = None, slow_model: str | None = None,
                max_tokens: int | None = None, report_max_tokens: int | None = None) -> None:
+        """Configure the simulated SDK runtime from the supplied settings."""
         if not api_key or not isinstance(api_key, str):
             raise AekoNotConfiguredError("Aeko.config() requires a non-empty API key.")
 
@@ -216,31 +242,60 @@ class Aeko:
 
     @staticmethod
     def is_configured() -> bool:
+        """Return whether the simulated SDK has an API key."""
         return bool(RUNTIME.api_key)
 
     @staticmethod
     def reset() -> None:
+        """Restore the simulated SDK runtime defaults."""
         RUNTIME.reset()
         AekoMessenger.reset_script()
         AekoInventoryAnalyzer.reset_script()
 
 
-# ---------------------------------------------------------------------------
-# Entry points
-# ---------------------------------------------------------------------------
+def _tracking(id_request, flow, agents, error_description=None, latency=None):
+    """The `AekoMetrics` a scripted run reports."""
+
+    return AekoMetrics(
+        id_request=id_request,
+        latency=DEFAULT_LATENCY if latency is None else latency,
+        error_description=error_description,
+        flow=flow,
+        used_agents=[
+            AekoAgentMetrics(
+                name=name,
+                input_tokens=11,
+                output_tokens=22,
+                llm="fake-fast",
+                used_tools=[],
+            )
+            for name in agents
+        ],
+    )
+
+
+def _fail_with(error, metrics):
+    """Attach a failed run's tracking to the exception carrying it out."""
+
+    try:
+        setattr(error, "aeko_metrics", metrics)
+    except AttributeError:
+        pass
+
+    return error
+
+
 class AekoMessenger:
     """Conversational entry point, scripted instead of routed through Gemini."""
 
-    # Every messenger built during a test, so a suite can reach the instance
-    # the API created per request.
     instances: list["AekoMessenger"] = []
 
-    # What the next run answers. Tests assign these; `Aeko.reset()` clears them.
     next_output: str | None = None
     next_approved: bool = True
     next_agents: tuple[str, ...] = ("FAQ",)
     next_guardrail_retries: int = 0
     next_error: Exception | None = None
+    next_latency: int | None = None
 
     def __init__(self, user: AekoUser, memories: Sequence[AekoUserMemory] | None = None):
         if not isinstance(user, AekoUser):
@@ -260,15 +315,18 @@ class AekoMessenger:
 
     @classmethod
     def reset_script(cls):
+        """Clear scripted responses, errors, and recorded calls."""
         cls.instances = []
         cls.next_output = None
         cls.next_approved = True
         cls.next_agents = ("FAQ",)
         cls.next_guardrail_retries = 0
         cls.next_error = None
+        cls.next_latency = None
 
     @classmethod
     def set_tools(cls, tools: dict[str, list[Any]]) -> None:
+        """Register tools for the supplied agent names in the simulated SDK."""
         normalized = {}
         for agent, agent_tools in tools.items():
             if agent not in AGENT_NAMES:
@@ -278,7 +336,9 @@ class AekoMessenger:
         RUNTIME.set_tools_calls.append(dict(tools))
         RUNTIME.tools = normalized
 
-    def send_message(self, message: str, session: AekoSession) -> AekoMessageResponse:
+    def send_message(self, message: str, session: AekoSession, *,
+                     id_request: str) -> AekoMessageResponse:
+        """Record the conversation call and return or raise its scripted result."""
         RUNTIME.require_api_key()
 
         if not isinstance(session, AekoSession):
@@ -286,35 +346,61 @@ class AekoMessenger:
                 f"send_message() takes an AekoSession, got {type(session).__name__}."
             )
 
-        self.sent.append((message, session))
+        if not isinstance(id_request, str):
+            raise TypeError(
+                f"send_message() takes id_request as a string, got {type(id_request).__name__}."
+            )
+
+        self.sent.append((message, session, id_request))
 
         if type(self).next_error is not None:
-            raise type(self).next_error
+            error = type(self).next_error
+            raise _fail_with(
+                error,
+                _tracking(
+                    id_request,
+                    CONVERSATIONAL_FLOW,
+                    type(self).next_agents,
+                    f"{type(error).__name__}: {error}",
+                    type(self).next_latency,
+                ),
+            )
 
         output = type(self).next_output
         if output is None:
             output = f"echo: {message}" if type(self).next_approved else ""
 
-        turn = AekoMessage(
-            input=message,
-            output=output,
-            llm="fake-fast,fake-slow",
-            input_tokens=11,
-            output_tokens=22,
-        )
+        if not output:
+            raise _fail_with(
+                MalformedAgentOutputError(REVIEW_FAILURE),
+                _tracking(
+                    id_request,
+                    CONVERSATIONAL_FLOW,
+                    type(self).next_agents,
+                    REVIEW_FAILURE,
+                    type(self).next_latency,
+                ),
+            )
 
-        # Only a final result is recorded: a rejected draft never becomes
-        # context for the next question.
-        if output:
-            session.messages.append(turn)
-            session.updated_at = turn.submitted_at
+        turn = AekoMessage(input=message, output=output)
+
+        session.messages.append(turn)
+        session.updated_at = turn.submitted_at
 
         return AekoMessageResponse(
             message=turn,
+            aeko_metrics=_tracking(
+                id_request,
+                CONVERSATIONAL_FLOW,
+                type(self).next_agents,
+                None,
+                type(self).next_latency,
+            ),
             id_session=session.id,
             id_user=session.id_user,
             agents_called=list(type(self).next_agents),
-            approved=bool(output) and type(self).next_approved,
+
+            approved=True,
             guardrail_retries=type(self).next_guardrail_retries,
         )
 
@@ -326,6 +412,8 @@ class AekoInventoryAnalyzer:
 
     next_plan_fields: dict[str, str] = {}
     next_error: Exception | None = None
+    next_agents: tuple[str, ...] = ("Análista de inventários",)
+    next_latency: int | None = None
 
     def __init__(self):
         self.context = ""
@@ -334,16 +422,22 @@ class AekoInventoryAnalyzer:
 
     @classmethod
     def reset_script(cls):
+        """Clear scripted responses, errors, and recorded calls."""
         cls.instances = []
         cls.next_plan_fields = {}
         cls.next_error = None
+        cls.next_agents = ("Análista de inventários",)
+        cls.next_latency = None
 
     def set_context(self, context: str) -> None:
+        """Record the analysis context supplied by the service."""
         if not isinstance(context, str):
             raise TypeError(f"set_context() takes a string, got {type(context).__name__}.")
         self.context = context or ""
 
-    def analyze(self, inventory: str, *, id_external_inventory: int) -> AekoImprovementPlan:
+    def analyze(self, inventory: str, *, id_external_inventory: int,
+                id_request: str) -> AekoAnalysisResponse:
+        """Record the inventory analysis call and return or raise its scripted result."""
         RUNTIME.require_api_key()
 
         if not isinstance(inventory, str):
@@ -355,11 +449,25 @@ class AekoInventoryAnalyzer:
                 "analyze() takes id_external_inventory as an int, "
                 f"got {type(id_external_inventory).__name__}."
             )
+        if not isinstance(id_request, str):
+            raise TypeError(
+                f"analyze() takes id_request as a string, got {type(id_request).__name__}."
+            )
 
-        self.analyzed.append((inventory, id_external_inventory))
+        self.analyzed.append((inventory, id_external_inventory, id_request))
 
         if type(self).next_error is not None:
-            raise type(self).next_error
+            error = type(self).next_error
+            raise _fail_with(
+                error,
+                _tracking(
+                    id_request,
+                    ANALYTICAL_FLOW,
+                    type(self).next_agents,
+                    f"{type(error).__name__}: {error}",
+                    type(self).next_latency,
+                ),
+            )
 
         fields = {
             "defined_problem": "high scope 1 emissions",
@@ -368,4 +476,13 @@ class AekoInventoryAnalyzer:
             **type(self).next_plan_fields,
         }
 
-        return AekoImprovementPlan(id_external_inventory=id_external_inventory, **fields)
+        return AekoAnalysisResponse(
+            plan=AekoImprovementPlan(id_external_inventory=id_external_inventory, **fields),
+            aeko_metrics=_tracking(
+                id_request,
+                ANALYTICAL_FLOW,
+                type(self).next_agents,
+                None,
+                type(self).next_latency,
+            ),
+        )

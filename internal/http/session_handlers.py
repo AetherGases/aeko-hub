@@ -1,8 +1,10 @@
+"""Expose HTTP endpoints and response models for conversations and messages."""
+
 from datetime import datetime
 
 from fastapi import APIRouter, Depends, HTTPException, Path, Request
 from fastapi.concurrency import run_in_threadpool
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 
 from session.database.repository import Repository
 from session.service import Service
@@ -13,18 +15,18 @@ from user.database.repository import Repository as UserRepository
 router = APIRouter(tags=["Sessions"])
 
 class SessionResponseData(BaseModel):
-    id: str = Field(..., description="Internal session identifier.", example="65a8b3d6c0f8e1d7f4b2c001")
-    name: str = Field(..., description="Human-readable session name.", example="Weekly emissions review")
+    id: str = Field(..., description="Internal session identifier.", json_schema_extra={"example": "65a8b3d6c0f8e1d7f4b2c001"})
+    name: str = Field(..., description="Human-readable session name.", json_schema_extra={"example": "Weekly emissions review"})
 
-    class Config:
-        frozen = True
+    model_config = ConfigDict(frozen=True)
 
 class MessageResponseData(BaseModel):
-    input_message: str = Field(..., description="Input text sent to the AI agent.", example="Summarize this session.")
-    output_message: str = Field(..., description="Output returned by the AI agent.", example="Here is the summary.")
-    submitted_at: datetime = Field(..., description="Timestamp when the message was submitted.", example="2026-07-26T14:30:00Z")
+    input_message: str = Field(..., description="Input text sent to the AI agent.", json_schema_extra={"example": "Summarize this session."})
+    output_message: str = Field(..., description="Output returned by the AI agent.", json_schema_extra={"example": "Here is the summary."})
+    submitted_at: datetime = Field(..., description="Timestamp when the message was submitted.", json_schema_extra={"example": "2026-07-26T14:30:00Z"})
 
 def get_session_service(request: Request) -> IService:
+    """Build the session service from the application database, or raise HTTP 503."""
     database = request.app.state.db
     if database is None:
         raise HTTPException(status_code=503, detail="Database is not initialized")
@@ -56,9 +58,10 @@ def get_session_service(request: Request) -> IService:
     },
 )
 def get_user_sessions(
-    id_user: str = Path(..., description="Internal user identifier.", example="65a8b3d6c0f8e1d7f4b2c010"),
+    id_user: str = Path(..., description="Internal user identifier.", examples=["65a8b3d6c0f8e1d7f4b2c010"]),
     service: IService = Depends(get_session_service),
 ) -> list[SessionResponseData]:
+    """Retrieve the sessions belonging to a user."""
     try:
         sessions = service.get_user_sessions(id_user)
         return [SessionResponseData(id=session.id, name=session.name) for session in sessions]
@@ -93,9 +96,10 @@ def get_user_sessions(
     },
 )
 def get_session_messages(
-    id_session: str = Path(..., description="Internal session identifier.", example="65a8b3d6c0f8e1d7f4b2c001"),
+    id_session: str = Path(..., description="Internal session identifier.", examples=["65a8b3d6c0f8e1d7f4b2c001"]),
     service: IService = Depends(get_session_service),
 ) -> list[MessageResponseData]:
+    """Retrieve the stored messages for a session."""
     try:
         messages = service.get_session_messages(id_session)
         return [
@@ -130,7 +134,7 @@ def get_session_messages(
             },
         },
         400: {"description": "The request body is missing required fields or is invalid."},
-        502: {"description": "The output guardrail rejected every draft, so the run produced no answer."},
+        502: {"description": "Neither the output guardrail nor the response checker approved a draft, so the run produced no answer."},
         500: {"description": "The Aeko SDK is not initialized or an unexpected error occurred."},
     },
     openapi_extra={
@@ -173,14 +177,13 @@ async def send_message(
     request: Request,
     service: IService = Depends(get_session_service),
 ):
+    """Send a conversation turn and persist the approved response with its run metrics."""
     body = await request.json()
 
     id_session = body.get("id_session")
     input = body.get("input", "")
     id_user = body.get("id_user", "")
 
-    # The SDK objects are built per request: the messenger belongs to the user
-    # asking, and the session document travels with the call.
     aeko_messenger_factory = request.app.state._state.get("aeko_messenger_factory")
     aeko_session_factory = request.app.state._state.get("aeko_session_factory")
 
@@ -188,8 +191,6 @@ async def send_message(
         raise HTTPException(status_code=500, detail="Aeko SDK is not initialized")
 
     try:
-        # A run is several model calls long, and more when the guardrail sends a
-        # draft back, so it never runs on the event loop.
         message = await run_in_threadpool(
             service.send_message,
             id_session,

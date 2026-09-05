@@ -1,9 +1,4 @@
-"""Query-aware doubles for the small slice of pymongo the repositories use.
-
-The concrete repositories only need `find`, `find_one`, `insert_one` and
-`update_one`. These doubles record every call so tests can assert on the
-filters and update documents the query helpers build, without running Mongo.
-"""
+"""Provide MongoDB collection doubles that record queries and return scripted data."""
 
 
 class StubCollection:
@@ -14,31 +9,38 @@ class StubCollection:
         self.error = error
         self.inserted_id = inserted_id
         self.calls = []
+        self.find_options = []
 
     def _record(self, name, *args):
         self.calls.append((name, *args))
         if self.error is not None:
             raise self.error
 
-    def find(self, query=None, projection=None):
+    def find(self, query=None, projection=None, **options):
+        """Return scripted documents for the recorded collection query."""
+        self.find_options.append(options)
         self._record("find", query, projection)
         return iter(self.find_result)
 
     def find_one(self, query=None, projection=None):
+        """Return the scripted document for a collection lookup."""
         self._record("find_one", query, projection)
         if self.find_one_results:
             return self.find_one_results.pop(0)
         return self.find_one_result
 
     def insert_one(self, document):
+        """Record a document insertion and return a simulated insert result."""
         self._record("insert_one", document)
         return type("InsertOneResult", (), {"inserted_id": self.inserted_id})()
 
     def update_one(self, query, update):
+        """Record a document update and return a simulated update result."""
         self._record("update_one", query, update)
         return type("UpdateResult", (), {"modified_count": 1})()
 
     def call_args(self, name):
+        """Return the recorded positional arguments for the named operation."""
         return [call[1:] for call in self.calls if call[0] == name]
 
 

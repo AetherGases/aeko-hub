@@ -1,34 +1,7 @@
-"""Turns Climatiq's emission factor API into LangChain tools for the pollutant analyst.
+"""Expose Climatiq emission factor search and estimation as LangChain tools.
 
-This module never imports `aeko` — `cmd/api/main.py` is the single entry
-point for the SDK (see `test_only_the_entry_point_imports_the_sdk`), so the
-wrapping into an `AekoTool` happens there. What this module hands back is
-plain LangChain `Tool` objects, exactly like the MCP integrations next door.
-
-What is different is the transport: two documented, versioned REST endpoints
-reached with `requests`, rather than a child process speaking MCP. Climatiq
-publishes no MCP server of its own, and this project has already been broken
-twice by a third-party MCP package changing its tool schema underneath us.
-
-Which endpoints, and why not the AI ones
-----------------------------------------
-This started on Climatiq's Mapping Agent (`/mapping-agent/v1/*`), the AI that
-reads a free-text activity and picks the emission factor itself. That surface
-is paid: our key answered 403, which Climatiq defines as a valid key used for
-an operation it is not entitled to — not a bad key (401), not a bad request
-(400), not an exhausted quota (429). Without a paid plan the API is limited to
-general search and general estimates, which is what these two tools use:
-
-* `climatiq_search` — `GET /data/v1/search`. Free-text in, candidate emission
-  factors out, each with the `activity_id` and `unit_type` the estimate needs.
-* `climatiq_estimate` — `POST /data/v1/estimate`. One `activity_id` plus how
-  much of the activity, back comes kg CO2e.
-
-What was lost with the Mapping Agent is the automatic text-to-factor matching.
-That step now happens between the two calls, in the agent — which is a language
-model, so choosing the row that matches "cimento portland" is work it is
-already good at. What it must not do is the arithmetic, and it does not: the
-factor is applied by Climatiq, in the second call.
+Requests use the versioned data API and a fixed data release. The agent selects
+an activity factor from search results and supplies quantities for estimation.
 """
 
 import json
@@ -38,31 +11,16 @@ from typing import Any
 import requests
 from langchain_core.tools import Tool
 
-CLIMATIQ_API_KEY_ENV_VAR = "CLIMATIQ_API_KEY"
+from internal.shared import Module, logged
 
-# Versioned in the path by Climatiq itself, which is what makes pinning a
-# package unnecessary here: `v1` cannot change its schema underneath us.
+
 CLIMATIQ_BASE_URL = "https://api.climatiq.io/data/v1"
 CLIMATIQ_SEARCH_URL = f"{CLIMATIQ_BASE_URL}/search"
 CLIMATIQ_ESTIMATE_URL = f"{CLIMATIQ_BASE_URL}/estimate"
-
-# The data release, which both endpoints require and the agent never chooses.
-# The caret is Climatiq's own production recommendation: it takes corrections
-# that stay compatible with release 37, and never a change that would break the
-# request. Moving to 38 is a line and a test, reviewable in a diff — the same
-# reasoning as the pinned MCP packages in `cmd/api/mcp/`.
 CLIMATIQ_DATA_VERSION = "^37"
-
-# A tool call happens inside the agent's turn, and a request with no timeout
-# waits forever by default in `requests` — the user would watch the chat hang.
 CLIMATIQ_REQUEST_TIMEOUT = 60.0
-
-# Climatiq allows 500 per page. Five is what an analyst can actually weigh, and
-# every extra factor is context spent on rows nobody chose.
 CLIMATIQ_RESULTS_PER_PAGE = 5
 
-# The `emission_factor` selector's optional fields — everything that narrows
-# *which* factor is used. They travel inside the selector, not beside it.
 CLIMATIQ_SELECTOR_FIELDS = (
     "source",
     "source_dataset",
@@ -75,9 +33,7 @@ CLIMATIQ_SELECTOR_FIELDS = (
     "calculation_method",
 )
 
-# Optional fields of the estimate itself. `apply_inflation_adjustment` restates
-# the money spent in another year's terms, so it qualifies the activity data
-# rather than the factor, and Climatiq takes it at the top level.
+
 CLIMATIQ_ESTIMATE_FIELDS = ("apply_inflation_adjustment",)
 
 CLIMATIQ_SEARCH_DESCRIPTION = (
@@ -108,26 +64,21 @@ class ClimatiqError(RuntimeError):
 
 
 def _api_key(api_key: str | None = None) -> str:
-    """The Climatiq credential, from the caller or the environment."""
+    """Resolve the Climatiq credential from the argument or environment and reject an empty key."""
 
     if api_key is None:
-        api_key = os.environ.get(CLIMATIQ_API_KEY_ENV_VAR, "")
+        api_key = os.environ.get('CLIMATIQ_API_KEY', "")
 
     if api_key == "":
         raise RuntimeError(
-            f"{CLIMATIQ_API_KEY_ENV_VAR} is not set. Please set it in the environment or pass it to _request()."
+            "CLIMATIQ_API_KEY is not set. Please set it in the environment or pass it to _request()."
         )
 
     return api_key
 
 
 def _error_detail(response: Any) -> str:
-    """What Climatiq said about a failure, in the shape its docs promise.
-
-    A failure between us and Climatiq — a proxy, a gateway — answers HTML
-    rather than the documented `error_code`/`message` body, so the raw text is
-    the fallback. Either way the agent sees something it can act on.
-    """
+    """Extract an API error code and message, falling back to the raw response text."""
 
     try:
         body = response.json()
@@ -140,12 +91,7 @@ def _error_detail(response: Any) -> str:
 
 
 def _request(method: str, url: str, api_key: str | None = None, **kwargs: Any) -> Any:
-    """The one place that talks HTTP, and the one place failures are shaped.
-
-    Every way this can go wrong — no credential, no network, a rejected
-    request, an answer that is not JSON — leaves as a single readable error,
-    because the caller on the other end is an agent reading the text.
-    """
+    """Send a Climatiq HTTP request and translate transport, status, and JSON errors."""
 
     headers = {"Authorization": f"Bearer {_api_key(api_key)}"}
 
@@ -172,13 +118,7 @@ def _request(method: str, url: str, api_key: str | None = None, **kwargs: Any) -
 
 
 def _as_object(request_input: str | dict[str, Any] | None) -> dict[str, Any]:
-    """Turn the agent's input into the JSON object the endpoint takes.
-
-    Agents are asked for a JSON object string and also send the object itself;
-    both are accepted, mirroring `_parse_filter` in `cmd/api/mcp/mongo_mcp.py`.
-    Anything else is rejected carrying the text the agent actually sent, so it
-    can correct itself instead of seeing a bare `JSONDecodeError`.
-    """
+    """Accept a dictionary or decode a JSON object string, rejecting other input."""
 
     if isinstance(request_input, dict):
         return request_input
@@ -204,11 +144,7 @@ def _as_object(request_input: str | dict[str, Any] | None) -> dict[str, Any]:
 
 
 def _parse_search_query(query: str | None) -> str:
-    """The free text `/search` matches emission factors against.
-
-    An empty search has no sensible default, so it is rejected here rather
-    than spending a request to be told the same thing.
-    """
+    """Validate and trim the nonempty activity or material search text."""
 
     if not isinstance(query, str) or query.strip() == "":
         raise ValueError(
@@ -219,20 +155,12 @@ def _parse_search_query(query: str | None) -> str:
 
 
 def _parse_estimate_request(request_input: str | dict[str, Any] | None) -> dict[str, Any]:
-    """Validate the agent's input and build the `/estimate` body from it.
-
-    Built rather than forwarded: the payload that reaches Climatiq carries only
-    fields Climatiq documents, in the two places it expects them — the factor
-    selector and the estimate itself — whatever the agent decided to attach.
-    """
+    """Validate estimate input and build the factor selector and activity payload."""
 
     request = _as_object(request_input)
 
     activity_id = request.get("activity_id")
     if not isinstance(activity_id, str) or activity_id.strip() == "":
-        # Free text belongs to `climatiq_search`, one step earlier: this
-        # endpoint matches nothing itself, which is what the Mapping Agent did
-        # and what our plan does not include.
         raise ValueError(
             f'"activity_id" must be an emission factor id from climatiq_search, '
             f"got {activity_id!r}."
@@ -270,8 +198,9 @@ def _parse_estimate_request(request_input: str | dict[str, Any] | None) -> dict[
     return payload
 
 
+@logged(Module.INTEGRATION, "climatiq_search")
 def _climatiq_search(query: str | None = "") -> Any:
-    """The emission factors Climatiq has for a material, without calculating."""
+    """Search Climatiq for emission factors matching the supplied activity text."""
 
     return _request(
         "GET",
@@ -284,18 +213,15 @@ def _climatiq_search(query: str | None = "") -> Any:
     )
 
 
+@logged(Module.INTEGRATION, "climatiq_estimate")
 def _climatiq_estimate(request_input: str | dict[str, Any] | None = "") -> Any:
-    """Emissions for one activity, from an emission factor the agent chose."""
+    """Estimate emissions using the selected factor and supplied activity quantities."""
 
     return _request("POST", CLIMATIQ_ESTIMATE_URL, json=_parse_estimate_request(request_input))
 
 
 def get_climatiq_tools() -> list[Tool]:
-    """Climatiq's factor search and calculator, for the "Analista de Poluentes".
-
-    In workflow order: the agent searches for the factor, then estimates with
-    the one it chose.
-    """
+    """Return emission factor search and estimation tools in workflow order."""
 
     return [
         Tool(

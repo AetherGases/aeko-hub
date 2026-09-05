@@ -1,3 +1,6 @@
+"""Persist and retrieve users and memories through MongoDB."""
+
+from internal.shared import Module, logged
 from user.database import query as q
 from user.entity import User, UserMemory
 from user.user import IRepository
@@ -6,7 +9,9 @@ class Repository(IRepository):
     def __init__(self, db):
         self.db = db
 
+    @logged(Module.DATABASE, "user.get_user")
     def get_user(self, id_external_user) -> User:
+        """Retrieve a user by external identifier."""
         try:
             user_data = self.db.user.find_one(q.get_user_query_filter(id_external_user))
             if not user_data:
@@ -17,7 +22,9 @@ class Repository(IRepository):
         except Exception as e:
             raise RuntimeError(f"Error fetching user from database: {e}")
 
+    @logged(Module.DATABASE, "user.get_user_by_id")
     def get_user_by_id(self, id_user: str) -> User:
+        """Retrieve a user by internal identifier, returning None when absent."""
         try:
             query, projection = q.get_user_query(id_user)
             user_data = self.db.user.find_one(query, projection)
@@ -27,7 +34,9 @@ class Repository(IRepository):
         except Exception as e:
             raise RuntimeError(f"Error fetching user by id from database: {e}")
 
+    @logged(Module.DATABASE, "user.get_user_memories")
     def get_user_memories(self, id_user: str) -> list[UserMemory]:
+        """Retrieve the memories stored for a user."""
         try:
             memories_data = self.db.user_memory.find(q.get_user_memories_query(id_user))
             return [
@@ -43,7 +52,9 @@ class Repository(IRepository):
         except Exception as e:
             raise RuntimeError(f"Error fetching user memories from database: {e}")
 
+    @logged(Module.DATABASE, "user.create_user_memory")
     def create_user_memory(self, user_memory: UserMemory):
+        """Persist a memory associated with a user."""
         try:
             memory_data = q.create_user_memory_query(user_memory)
             self.db.user_memory.insert_one(memory_data)
@@ -52,6 +63,7 @@ class Repository(IRepository):
             raise RuntimeError(f"Error creating user memory in database: {e}")
 
 def user_from_data(data: dict) -> User:
+    """Map a MongoDB document to a user entity."""
     return User(
         id=str(data["_id"]),
         id_external_user=data["id_external_user"],
